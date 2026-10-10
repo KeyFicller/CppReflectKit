@@ -131,6 +131,33 @@ void expect_description(const json& _properties, const char* _name, const char* 
     EXPECT_EQ(_properties.at(_name).at("description").get<std::string>(), _expected);
 }
 
+/// Runs `_fn` and returns the message of the js::bind_error it throws, or a marker
+/// for any other outcome, so a test can assert the error type and its text
+/// together: a strict binder must fail loudly, not coerce.
+template <typename Fn>
+std::string bind_error_message(Fn&& _fn)
+{
+    try {
+        _fn();
+    } catch (const js::bind_error& e) {
+        return e.what();
+    } catch (const std::exception& e) {
+        return std::string("(not a bind_error) ") + e.what();
+    }
+    return "(no error)";
+}
+
+/// Decodes a SearchRequest from `_text`; a malformed fixture surfaces through
+/// bind_error_message as a "(not a bind_error)" message rather than crashing.
+app::SearchRequest decode_request(std::string_view _text)
+{
+    const auto doc = parse_json(_text);
+    if (!doc) {
+        throw std::runtime_error("test fixture is not valid JSON");
+    }
+    return js::from_json<app::SearchRequest>(*doc);
+}
+
 constexpr std::string_view fn_schema = js::function_schema<^^app::CppReflectServer::search_documents>();
 constexpr std::string_view tool_schema =
     js::function_schema<^^app::CppReflectServer::search_documents, js::Style::OpenAiTool>();
@@ -235,4 +262,97 @@ TEST(JsonSchema, an_out_of_range_enum_is_rejected)
     EXPECT_THROW(
         (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *doc),
         std::exception);
+}
+
+// A document arrives from a model, so every value must match the reflected type
+// exactly: a mistyped field is an error, never a coercion, and the message names
+// the field it failed on so the model can correct itself.
+
+TEST(JsonSchema, a_mistyped_scalar_is_rejected)
+{
+    // An int is not a string, and a float is not an int.
+    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":42,"ranges":[]}})"); }),
+              "query: text: expected string");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[{"min":"1"}]}})");
+              }),
+              "query: ranges: min: expected integer");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[{"min":1.5}]}})");
+              }),
+              "query: ranges: min: expected integer");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[]},"debug":"true"})");
+              }),
+              "debug: expected boolean");
+}
+
+TEST(JsonSchema, a_mistyped_container_is_rejected)
+{
+    // A sequence must be an array and a class must be an object; neither is coerced.
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":"nope"}})");
+              }),
+              "query: ranges: expected array");
+    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":"x","ranges":{}}})"); }),
+              "query: ranges: expected array");
+    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":[]})"); }),
+              "query: expected object");
+}
+
+TEST(JsonSchema, an_array_of_the_wrong_length_is_rejected)
+{
+    // std::array's length is part of its type, so a short document is an error
+    // rather than a silently padded result.
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[]},"top_k":[1,2]})");
+              }),
+              "top_k: array length mismatch: expected 3, got 2");
+}
+
+TEST(JsonSchema, a_mistyped_enum_is_rejected)
+{
+    // An enum is a JSON string: a number is not one, and an unknown name is not an
+    // enumerator. Both carry the field's path.
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[],"unit":1}})");
+              }),
+              "query: unit: expected string");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":[],"unit":"Kelvin"}})");
+              }),
+              "query: unit: invalid Unit value: Kelvin");
+}
+
+TEST(JsonSchema, a_missing_required_member_is_rejected)
+{
+    // `text` and `ranges` carry no initializer, so they must be present; `unit` and
+    // `debug` do, so they may be omitted.
+    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"ranges":[]}})"); }),
+              "query: missing required member: text");
+    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":"x"}})"); }),
+              "query: missing required member: ranges");
+}
+
+TEST(JsonSchema, the_tool_call_path_binds_the_same_way)
+{
+    // The function path shares from_json, and an argument with no default and no
+    // std::optional must be supplied; a mistyped one names the argument.
+    app::CppReflectServer server;
+
+    const auto missing = parse_json(R"({"limit":5,"exact_match":true})");
+    ASSERT_TRUE(missing.has_value());
+    EXPECT_EQ(bind_error_message([&] {
+                  (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(
+                      server, *missing);
+              }),
+              "missing required argument: query");
+
+    const auto mistyped = parse_json(R"({"query":5,"limit":5,"exact_match":true})");
+    ASSERT_TRUE(mistyped.has_value());
+    EXPECT_EQ(bind_error_message([&] {
+                  (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(
+                      server, *mistyped);
+              }),
+              "query: expected string");
 }

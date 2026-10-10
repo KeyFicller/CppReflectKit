@@ -12,6 +12,7 @@
 #include <iostream>
 #include <meta>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -378,8 +379,9 @@ consteval std::string param_object_schema_impl(std::index_sequence<Is...>)
         }
         properties += "\"" + name + "\":" +
                       with_description(param_schema<PT>(), param_description<Fn, Is>());
-        // As with members: a default argument makes the parameter omittable.
-        if constexpr (!is_optional<PT>::value && !meta::has_default_argument(param_at<Fn, Is>())) {
+        // A default argument does not make a parameter omittable: its value cannot
+        // be recovered at dispatch time, so the model must supply it.
+        if constexpr (!is_optional<PT>::value) {
             if (!required.empty()) {
                 required += ",";
             }
@@ -470,6 +472,14 @@ consteval std::string_view tool_schema()
 // are known at compile time, only the values come from the JSON document.
 // Deserialization is driven by the reflection, so any reflected struct works.
 
+/// A missing required field, or a value whose JSON type does not match the
+/// reflected C++ type. This is a trust boundary: the document comes from a model,
+/// so "540" is not an int and a silently defaulted field is a wrong call, not a
+/// convenience. During nested decoding each level prefixes the field's own name.
+struct bind_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 template <typename T>
 consteval std::size_t enumerator_count()
 {
@@ -520,7 +530,7 @@ T enum_from_string(const std::string& _name)
             return table.values[i];
         }
     }
-    throw std::runtime_error("invalid " + std::string(meta::identifier_of(^^T)) + " value: " + _name);
+    throw bind_error("invalid " + std::string(meta::identifier_of(^^T)) + " value: " + _name);
 }
 
 /// Enum -> its reflected enumerator name, the inverse of enum_from_string().
@@ -554,10 +564,16 @@ void assign_member(auto& _out, const nlohmann::json& _j)
     using MT = std::remove_cvref_t<typename [: meta::type_of(M) :]>;
     constexpr std::string_view name = std::define_static_string(meta::identifier_of(M));
     const std::string key(name);
-    if (_j.contains(key)) {
+    if (!_j.contains(key)) {
+        if constexpr (!is_optional<MT>::value && !meta::has_default_member_initializer(M)) {
+            throw bind_error("missing required member: " + key);
+        }
+        return;
+    }
+    try {
         _out.[: M :] = from_json<MT>(_j.at(key));
-    } else if constexpr (!is_optional<MT>::value && !meta::has_default_member_initializer(M)) {
-        throw std::runtime_error("missing required member: " + key);
+    } catch (const bind_error& e) {
+        throw bind_error(key + ": " + e.what());
     }
 }
 
@@ -572,7 +588,10 @@ T object_from_json(const nlohmann::json& _j, std::index_sequence<Is...>)
     return out;
 }
 
-/// JSON value -> C++ value, mirroring param_schema()'s type dispatch.
+/// JSON value -> C++ value, mirroring param_schema()'s type dispatch. Only the
+/// exact JSON type is accepted: "540" is an error, not a coercion into int, and
+/// 540.0 is not an int either. The document comes from a model, so a mistyped
+/// argument must fail loudly rather than land as a plausible-looking value.
 template <typename T>
 T from_json(const nlohmann::json& _j)
 {
@@ -582,6 +601,9 @@ T from_json(const nlohmann::json& _j)
         }
         return from_json<typename T::value_type>(_j);
     } else if constexpr (is_sequence<T>::value) {
+        if (!_j.is_array()) {
+            throw bind_error("expected array");
+        }
         using V = typename T::value_type;
         if constexpr (requires(T t) { t.push_back(V{}); }) {
             T out{};
@@ -597,9 +619,9 @@ T from_json(const nlohmann::json& _j)
             // std::array length is part of its type, so a partial document is an
             // error rather than a silently padded result.
             if (_j.size() != out.size()) {
-                throw std::runtime_error("array length mismatch: expected " +
-                                         std::to_string(out.size()) + ", got " +
-                                         std::to_string(_j.size()));
+                throw bind_error("array length mismatch: expected " +
+                                 std::to_string(out.size()) + ", got " +
+                                 std::to_string(_j.size()));
             }
             for (std::size_t i = 0; i < out.size(); ++i) {
                 out[i] = from_json<V>(_j.at(i));
@@ -607,19 +629,40 @@ T from_json(const nlohmann::json& _j)
             return out;
         }
     } else if constexpr (std::is_enum_v<T>) {
+        if (!_j.is_string()) {
+            throw bind_error("expected string");
+        }
         return enum_from_string<T>(_j.get<std::string>());
     } else if constexpr (std::is_same_v<T, bool>) {
+        if (!_j.is_boolean()) {
+            throw bind_error("expected boolean");
+        }
         return _j.get<bool>();
     } else if constexpr (std::is_integral_v<T>) {
+        if (!_j.is_number_integer()) {
+            throw bind_error("expected integer");
+        }
         return _j.get<T>();
     } else if constexpr (std::is_floating_point_v<T>) {
+        if (!_j.is_number()) {
+            throw bind_error("expected number");
+        }
         return _j.get<T>();
     } else if constexpr (std::is_same_v<T, std::string>) {
+        if (!_j.is_string()) {
+            throw bind_error("expected string");
+        }
         return _j.get<std::string>();
     } else if constexpr (std::is_same_v<T, std::string_view>) {
+        if (!_j.is_string()) {
+            throw bind_error("expected string");
+        }
         // Borrows from the document, which must outlive the result.
         return std::string_view(_j.get_ref<const std::string&>());
     } else if constexpr (std::is_class_v<T>) {
+        if (!_j.is_object()) {
+            throw bind_error("expected object");
+        }
         return object_from_json<T>(_j, std::make_index_sequence<member_count<T>()>());
     } else {
         static_assert(!sizeof(T), "js::from_json: unsupported type");
@@ -628,8 +671,8 @@ T from_json(const nlohmann::json& _j)
 
 /// Builds the argument tuple from the JSON object and actually calls the
 /// function. This is the LLM tool-call path: the model's `arguments` string in,
-/// a real C++ call out. A key with a default argument (or std::optional) may be
-/// omitted; a required one must be present.
+/// a real C++ call out. An std::optional key may be omitted; every other one must
+/// be present, and with the exact type it declares.
 template <meta::info Fn, std::size_t I>
 void assign_argument(auto& _args, const nlohmann::json& _j)
 {
@@ -638,9 +681,13 @@ void assign_argument(auto& _args, const nlohmann::json& _j)
         std::define_static_string(meta::identifier_of(param_at<Fn, I>()));
     const std::string key(name);
     if (_j.contains(key)) {
-        std::get<I>(_args) = from_json<PT>(_j.at(key));
-    } else if constexpr (!is_optional<PT>::value && !meta::has_default_argument(param_at<Fn, I>())) {
-        throw std::runtime_error("missing required argument: " + key);
+        try {
+            std::get<I>(_args) = from_json<PT>(_j.at(key));
+        } catch (const bind_error& e) {
+            throw bind_error(key + ": " + e.what());
+        }
+    } else if constexpr (!is_optional<PT>::value) {
+        throw bind_error("missing required argument: " + key);
     }
 }
 

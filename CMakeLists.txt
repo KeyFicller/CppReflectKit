@@ -209,20 +209,24 @@ cppreflect_library(undo)   # no external dependency
 
 # --- json + mcp: need nlohmann/json ------------------------------------------
 if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
-  find_package(nlohmann_json CONFIG QUIET)
-  if(NOT nlohmann_json_FOUND)
-    if(NOT CPPREF_FETCH_DEPS)
-      message(FATAL_ERROR "nlohmann_json not found and CPPREF_FETCH_DEPS=OFF")
+  # An importer that already provides the target (CampCat fetches nlohmann/json
+  # itself) must not get a second, colliding definition of it.
+  if(NOT TARGET nlohmann_json::nlohmann_json)
+    find_package(nlohmann_json CONFIG QUIET)
+    if(NOT nlohmann_json_FOUND)
+      if(NOT CPPREF_FETCH_DEPS)
+        message(FATAL_ERROR "nlohmann_json not found and CPPREF_FETCH_DEPS=OFF")
+      endif()
+      # nlohmann/json: validates the reflection-generated schemas.
+      set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+      FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY "${CPPREF_NLOHMANN_JSON_URL}"
+        GIT_TAG v3.12.0
+        GIT_SHALLOW TRUE
+      )
+      FetchContent_MakeAvailable(nlohmann_json)
     endif()
-    # nlohmann/json: validates the reflection-generated schemas.
-    set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(
-      nlohmann_json
-      GIT_REPOSITORY "${CPPREF_NLOHMANN_JSON_URL}"
-      GIT_TAG v3.12.0
-      GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(nlohmann_json)
   endif()
 
   cppreflect_library(json)

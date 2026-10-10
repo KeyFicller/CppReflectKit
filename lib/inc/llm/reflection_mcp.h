@@ -135,8 +135,9 @@ consteval std::string prompt_argument_json()
     if (!desc.empty()) {
         out += ",\"description\":\"" + js::json_escape(desc) + "\"";
     }
-    const bool required =
-        !js::is_optional<PT>::value && !meta::has_default_argument(js::param_at<Fn, I>());
+    // As with the tool schemas: a default argument cannot be recovered at
+    // dispatch time, so it does not make the argument optional.
+    const bool required = !js::is_optional<PT>::value;
     out += std::string(",\"required\":") + (required ? "true" : "false") + "}";
     return out;
 }
