@@ -1,12 +1,18 @@
-#include "test_entry.h"
-#include "helpers.h"
+#pragma once
+
+// Scaffolding for the undo/redo chapter: the reflected object model (DbObject,
+// MEMBER) and the stream/rollback machinery. The test itself lives next door in
+// test_undo_redo.cpp. Everything is deliberately at file scope with
+// internal linkage, because this header is included into exactly one test
+// translation unit.
+
+#include <cstring>
 #include <meta>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <stdexcept>
-#include <stack>
 #include <unordered_map>
-#include <cstring>
+#include <stack>
 
 struct DbObject;
 
@@ -208,8 +214,6 @@ public:
 
     void restore_from_fullback(const std::string_view& backup_data){
 
-        test_entry::log()->trace("restore_from_fullback: {} bytes", backup_data.size());
-
         int offset = 0;
 
         constexpr auto fields = std::define_static_array(std::meta::nonstatic_data_members_of(^^DbObject, std::meta::access_context::unchecked()));
@@ -238,8 +242,6 @@ public:
     }
 
     void restore_from_partialback(int _back_mem_index, const std::string_view& _backup_data) {
-
-        test_entry::log()->trace("restoring_from_partialback: field_index {}, field_backup {}", _back_mem_index, _backup_data);
 
         constexpr auto fields = std::define_static_array(std::meta::nonstatic_data_members_of(^^DbObject, std::meta::access_context::unchecked()));
         template for (constexpr std::meta::info field : fields) {
@@ -351,33 +353,5 @@ namespace {
 
             r = session_start;
         }
-    }
-}
-
-void test_entry::implement_undo_redo_reflection()
-{
-    test_entry::section banner{"Implement Undo Redo Reflection"};
-
-
-    DbObject obj;
-    obj.m_object_id = 1;
-    gl_object_map[1] = &obj;
-
-    auto data_before = obj.get_m_field_int();
-
-    command_start();
-    obj.open();
-    obj.touch_m_field_int() = 100;
-    obj.close();
-    command_end();
-    test_entry::log()->trace("obj.m_field_int.get() -> {}", obj.get_m_field_int());
-
-    command_rollback();
-    test_entry::log()->trace("obj.m_field_int.get() -> {}", obj.get_m_field_int());
-
-    auto data_after = obj.get_m_field_int();
-    test_entry::log()->trace("data_before -> {}, data_after -> {}", data_before, data_after);
-    if (data_before != data_after) {
-        throw std::runtime_error("data_before != data_after");
     }
 }

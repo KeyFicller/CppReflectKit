@@ -1,11 +1,19 @@
-#include "test_entry.h"
-#include "helpers.h"
-#include <meta>
-#include <string>
-#include <concepts>
-#include <optional>
+#pragma once
 
-enum class WeekDay{
+// Scaffolding for test_enumeration.cpp: the enums and the enumerator-walking
+// helpers (name <-> value, enumerator list, bitmask rendering). Included by
+// exactly one test translation unit.
+
+#include <array>
+#include <concepts>
+#include <cstdint>
+#include <meta>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
+enum class WeekDay {
     Monday,
     Tuesday,
     Wednesday,
@@ -16,7 +24,7 @@ enum class WeekDay{
 };
 
 enum class BitEnum : uint32_t {
-    kRead = 0x01 ,
+    kRead = 0x01,
     kWrite = 0x02,
     kXn = 0x04
 };
@@ -79,7 +87,7 @@ consteval auto impl_reflection_enum_list_val()
 {
     constexpr auto enumerators = std::define_static_array(std::meta::enumerators_of(^^E));
     std::array<E, enumerators.size()> values;
-    size_t index = 0;
+    std::size_t index = 0;
     template for (constexpr std::meta::info e : enumerators)
     {
         values[index++] = [:e:];
@@ -93,7 +101,7 @@ consteval auto impl_reflection_enum_list_str()
 {
     constexpr auto enumerators = std::define_static_array(std::meta::enumerators_of(^^E));
     std::array<std::string_view, enumerators.size()> values;
-    size_t index = 0;
+    std::size_t index = 0;
     template for (constexpr std::meta::info e : enumerators)
     {
         values[index++] = std::meta::identifier_of(e);
@@ -120,32 +128,4 @@ std::string impl_reflection_enum_bits_str(E _value)
         }
     }
     return str;
-}
-
-void test_entry::implement_enumeration_reflection()
-{
-    test_entry::section banner{"Implement Enumeration Reflection"};
-
-    test_entry::log()->trace("impl_classic_(WeekDay::Monday) -> {}", impl_classic_(WeekDay::Monday));
-
-    {
-        test_entry::log()->trace("impl_reflection_(WeekDay::Monday) -> {}", impl_reflection_(WeekDay::Monday));
-        std::string str = "Thursday";
-        test_entry::log()->trace("impl_reflection_<WeekDay>(\"Thursday\") -> {}", (int)(impl_reflection_<WeekDay>(str).value()));
-    }
-
-    {
-        test_entry::log()->trace("impl_reflection_enum_list_val<WeekDay>() -> {}",
-                     join(impl_reflection_enum_list_val<WeekDay>(),
-                          [](WeekDay _v) { return std::to_string(static_cast<int>(_v)); }));
-
-        test_entry::log()->trace("impl_reflection_enum_list_str<WeekDay>() -> {}",
-                     join(impl_reflection_enum_list_str<WeekDay>(),
-                          [](std::string_view _s) { return std::string(_s); }));
-    }
-
-    {
-        auto bits = static_cast<BitEnum>((int)(BitEnum::kRead) | (int)(BitEnum::kWrite));
-        test_entry::log()->trace("impl_reflection_enum_bits_str<BitEnum>(BitEnum::kRead | BitEnum::kWrite) -> {}", impl_reflection_enum_bits_str(bits));
-    }
 }

@@ -1,5 +1,10 @@
-#include "test_entry.h"
-#include "helpers.h"
+#pragma once
+
+// Scaffolding for test_reflection_widgets.cpp: the demo data types and the reflection ->
+// ImGui widget mapping (MyUIControl plus the recursive impl_reflection_ui walk).
+// The app itself -- the window callback and the GLFW/OpenGL backend -- stays in
+// test_reflection_widgets.cpp and scaffold/imgui_backend_glfw_opengl3.cpp.
+
 #include <meta>
 #include <print>
 #include <format>
@@ -8,9 +13,6 @@
 #include <string>
 #include <imgui.h>
 #include <imgui_stdlib.h>
-
-
-namespace {
 
 struct MyBaseStruct {
     std::string m_mem_tag;
@@ -24,8 +26,6 @@ struct MyStruct : public MyBaseStruct {
 struct MyDeriveStruct : public MyStruct {
     MyStruct m_mem_other;
 };
-
-} // namespace
 
 template <typename T>
 struct MyUIControl {};
@@ -64,8 +64,6 @@ struct MyUIControl<std::string> {
         ImGui::PopID();
     }
 };
-
-extern void run_imgui_demo_window(std::function<void()> my_draw_callback);
 
 template <typename T>
 void impl_reflection_ui(T&);
@@ -142,19 +140,4 @@ void impl_reflection_ui(T& _object)
         const std::string text = std::format("{}", _object);
         ImGui::TextUnformatted(text.c_str());
     }
-}
-
-void test_entry::implement_ui_reflection()
-{
-    test_entry::section banner{"Implement UI Reflection"};
-
-    auto my_draw_callback = [] {
-        static MyDeriveStruct data{};
-        ImGui::Begin("UI Reflection");
-        ImGui::TextUnformatted("Auto Reflect Member List.");
-        impl_reflection_ui(data);
-        ImGui::End();
-    };
-
-    run_imgui_demo_window(my_draw_callback);
 }

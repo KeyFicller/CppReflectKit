@@ -5,32 +5,11 @@
 #include <string_view>
 #include <vector>
 
-// The reflection suite's entry points, in the order main() runs them; each is
-// implemented in its own translation unit. Shared helpers live in "helpers.h".
-namespace test_entry {
-
-void hello_reflection();
-
-void grammar_and_concepts();
-
-void list_of_meta_functions();
-
-void implement_enumeration_reflection();
-
-void implement_struct_reflection();
-
-void implement_ui_reflection();
-
-void implement_undo_redo_reflection();
-
-void implement_ffn_reflection();
-
-void implement_json_schema();
-
-/// Exercises the MCP server end to end: drives the real serve() loop over string
-/// streams and checks the tool / prompt / resource projections and the protocol
-/// error codes.
-void implement_mcp();
+// The runtime entry points the C++ side exposes outward: the `--*` CLI that
+// llm_client.py drives, the `--serve` socket used for joint debugging, and the
+// MCP stdio loop. main() is the only caller. Everything here is transport around
+// the one dispatch in run_request, so nothing in this header is test code.
+namespace bridge {
 
 /// Runs one CLI-shaped request without touching std::cin/std::cout: `_args` is
 /// argv[1..], and `_in` supplies stdin for the commands that take it (it is left
@@ -47,4 +26,4 @@ int serve(std::string_view _socket_path);
 /// Returns when stdin reaches EOF.
 int run_mcp();
 
-} // namespace test_entry
+} // namespace bridge

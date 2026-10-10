@@ -5,7 +5,7 @@
 // the base constructor scans `Derived` by reflection -- no registration line, no
 // separate namespace. It owns the JSON-RPC 2.0 loop and the three tables.
 // Targets protocol revision 2026-07-28 (stateless; no initialize handshake). See
-// docs/mcp_automation.md.
+// docs/reflection_bridge.md.
 
 #include "reflection_json.h"
 

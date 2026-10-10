@@ -2,14 +2,14 @@
 
 // The reflection-driven JSON layer: schema generation (struct/function -> JSON
 // Schema), the annotation types (doc / desc / param_docs), and the reverse decoder
-// (JSON -> C++). Lifted verbatim out of implement_json_schema.cpp so the MCP server
-// (src/mcp.h) can reuse it without a translation-unit dependency.
-
-#include "helpers.h"
+// (JSON -> C++). Lifted verbatim out of test_json_schema.cpp so the MCP server
+// (mcp.h) can reuse it without a translation-unit dependency.
 
 #include <array>
 #include <charconv>
 #include <cstddef>
+#include <cstdlib>
+#include <iostream>
 #include <meta>
 #include <optional>
 #include <string>
@@ -781,8 +781,8 @@ inline void register_model(model_entry _entry)
 {
     for (const auto& existing : model_registry()) {
         if (existing.name == _entry.name) {
-            test_entry::log_err()->error("js: duplicate model name '{}' (names must be unique)",
-                                         _entry.name);
+            std::cerr << "js: duplicate model name '" << _entry.name
+                      << "' (names must be unique)\n";
             std::abort();
         }
     }

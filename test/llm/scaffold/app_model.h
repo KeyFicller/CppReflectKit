@@ -5,7 +5,7 @@
 // that use them are member functions of app::CppReflectServer (see app_server.h).
 //
 // Model registration (CPP_REFLECT_MODEL) deliberately stays in
-// implement_json_schema.cpp so exactly one translation unit runs those static
+// test_json_schema.cpp so exactly one translation unit runs those static
 // initializers.
 
 #include "reflection_json.h"

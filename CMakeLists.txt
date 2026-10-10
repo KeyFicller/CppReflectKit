@@ -46,8 +46,8 @@ add_compile_options(-isysroot "${_sdk}" "$<$<COMPILE_LANGUAGE:CXX>:-freflection-
 add_link_options(-isysroot "${_sdk}" -L "${LLVM_ROOT}/lib" "-Wl,-rpath,${LLVM_ROOT}/lib")
 
 # Diagnostics for this project's own target only; third-party code is left alone.
-option(CPPREF_WARNINGS "Enable -Wall -Wextra on CppReflection" ON)
-option(CPPREF_SANITIZE "Build CppReflection with ASan + UBSan" OFF)
+option(CPPREF_WARNINGS "Enable -Wall -Wextra on the test targets" ON)
+option(CPPREF_SANITIZE "Build the test targets with ASan + UBSan" OFF)
 
 # ---------------------------------------------------------------------------
 # Third-party dependencies.
@@ -121,26 +121,36 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-# spdlog: colored console output for the demo suite and the --serve diagnostics.
-# No gitee mirror exists, so this one defaults to github.com; point
-# -DCPPREF_SPDLOG_URL=... at a mirror if you have one.
-set(CPPREF_SPDLOG_URL "https://github.com/gabime/spdlog.git" CACHE STRING "")
-set(CPPREF_SPDLOG_TAG "v1.15.3" CACHE STRING "")
-set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
-set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+# GoogleTest: the assertion and test-runner framework for the test targets. With
+# it, compile-time expectations are static_assert and runtime ones are EXPECT_*;
+# there is no hand-rolled runner or macro.
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+if(CPPREF_DEPS_FROM_GITHUB)
+  set(CPPREF_GOOGLETEST_URL "https://github.com/google/googletest.git" CACHE STRING "")
+else()
+  set(CPPREF_GOOGLETEST_URL "https://gitee.com/mirrors/googletest.git" CACHE STRING "")
+endif()
 FetchContent_Declare(
-  spdlog
-  GIT_REPOSITORY "${CPPREF_SPDLOG_URL}"
-  GIT_TAG "${CPPREF_SPDLOG_TAG}"
+  googletest
+  GIT_REPOSITORY "${CPPREF_GOOGLETEST_URL}"
+  GIT_TAG v1.15.2
   GIT_SHALLOW TRUE
 )
-FetchContent_MakeAvailable(spdlog)
+FetchContent_MakeAvailable(googletest)
+
+# gtest is third-party: leave its own sources alone rather than inheriting this
+# project's warning set.
+target_compile_options(gtest PRIVATE -Wno-character-conversion)
 
 # ---------------------------------------------------------------------------
-# CppReflection executable.
+# One executable per test directory. basic/ and undo/ take their main() from
+# gtest_main; llm/ keeps its own main because the binary doubles as the CLI/MCP
+# process llm_client.py spawns. Each group links only what it uses.
 # ---------------------------------------------------------------------------
+set(CPPREF_TEST_INCLUDES
+    "${CMAKE_CURRENT_SOURCE_DIR}/lib/inc")
+
 set(IMGUI_SOURCES
     ${CPPREF_IMGUI_ROOT}/imgui.cpp
     ${CPPREF_IMGUI_ROOT}/imgui_demo.cpp
@@ -151,44 +161,88 @@ set(IMGUI_SOURCES
     ${CPPREF_IMGUI_ROOT}/backends/imgui_impl_glfw.cpp
     ${CPPREF_IMGUI_ROOT}/backends/imgui_impl_opengl3.cpp)
 
-add_executable(
-  CppReflection
-  main.cpp
-  src/hello_reflection.cpp
-  src/grammar_and_concepts.cpp
-  src/list_of_meta_functions.cpp
-  src/implement_enumeration_reflection.cpp
-  src/implement_struct_reflection.cpp
-  src/implement_ui_reflection.cpp
-  src/implement_undo_redo_reflection.cpp
-  src/implement_ffn_reflection.cpp
-  src/implement_json_schema.cpp
-  src/implement_mcp.cpp
-  src/imgui_backend_glfw_opengl3.cpp)
-target_sources(CppReflection PRIVATE ${IMGUI_SOURCES})
-target_include_directories(CppReflection PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+# --- basic/ : reflection language surface, reads yaml-cpp in one chapter ----
+add_executable(basic_reflection
+  test/basic/test_hello.cpp
+  test/basic/test_grammar.cpp
+  test/basic/test_meta_functions.cpp
+  test/basic/test_enumeration.cpp
+  test/basic/test_struct.cpp
+  test/basic/test_forward_chain.cpp)
+target_include_directories(basic_reflection PRIVATE ${CPPREF_TEST_INCLUDES})
+target_link_libraries(basic_reflection PRIVATE yaml-cpp::yaml-cpp GTest::gtest_main)
+
+# --- undo/ : reflection-driven undo/redo --------------------------------
+add_executable(undo_reflection
+  test/undo/test_undo_redo.cpp)
+target_include_directories(undo_reflection PRIVATE ${CPPREF_TEST_INCLUDES})
+target_link_libraries(undo_reflection PRIVATE GTest::gtest_main)
+
+# --- ui/ : reflection-driven widgets (interactive; not run by ctest) -----
+add_executable(ui_reflection
+  test/ui/main.cpp
+  test/ui/test_reflection_widgets.cpp
+  test/ui/scaffold/imgui_backend_glfw_opengl3.cpp
+  ${IMGUI_SOURCES})
+target_include_directories(ui_reflection PRIVATE
+    ${CPPREF_TEST_INCLUDES}
     "${CPPREF_IMGUI_ROOT}"
     "${CPPREF_IMGUI_ROOT}/backends"
     "${CPPREF_IMGUI_ROOT}/misc/cpp")
-target_link_libraries(CppReflection PRIVATE yaml-cpp::yaml-cpp glfw OpenGL::GL nlohmann_json::nlohmann_json spdlog::spdlog)
+target_link_libraries(ui_reflection PRIVATE glfw OpenGL::GL)
 
-if(CPPREF_WARNINGS)
-  target_compile_options(CppReflection PRIVATE -Wall -Wextra)
-endif()
-if(CPPREF_SANITIZE)
-  target_compile_options(CppReflection PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-  target_link_options(CppReflection PRIVATE -fsanitize=address,undefined)
-endif()
+# --- llm/ : the app under test, plus its tests. -------------------------
+# scaffold/ holds the example application (model, server, transport, entries,
+# Python client); the two .cpp files beside it are the tests. The name stays
+# CppReflection because llm_client.py spawns build/CppReflection.
+add_executable(CppReflection
+  test/llm/scaffold/main.cpp
+  test/llm/scaffold/mcp_server.cpp
+  test/llm/scaffold/bridge.cpp
+  test/llm/test_json_schema.cpp
+  test/llm/test_mcp.cpp)
+target_include_directories(CppReflection PRIVATE ${CPPREF_TEST_INCLUDES})
+target_link_libraries(CppReflection PRIVATE nlohmann_json::nlohmann_json GTest::gtest)
 
-# ld64 leaves DWARF in the object files; lldb needs a .dSYM beside the binary
+set(CPPREF_TEST_TARGETS basic_reflection undo_reflection ui_reflection CppReflection)
+
+# Diagnostics for this project's own targets only; third-party code is left alone.
+foreach(_target IN LISTS CPPREF_TEST_TARGETS)
+  if(CPPREF_WARNINGS)
+    target_compile_options(${_target} PRIVATE -Wall -Wextra)
+  endif()
+  if(CPPREF_SANITIZE)
+    target_compile_options(${_target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(${_target} PRIVATE -fsanitize=address,undefined)
+  endif()
+endforeach()
+
+# ld64 leaves DWARF in the object files; lldb needs a .dSYM beside each binary
 # to bind breakpoints. (macOS)
 if(APPLE)
   find_program(CPPREF_DSYMUTIL dsymutil)
   if(CPPREF_DSYMUTIL)
-    add_custom_command(TARGET CppReflection POST_BUILD
-      COMMAND "${CPPREF_DSYMUTIL}" "$<TARGET_FILE:CppReflection>"
-      COMMENT "Generating dSYM for CppReflection"
-      VERBATIM)
+    foreach(_target IN LISTS CPPREF_TEST_TARGETS)
+      add_custom_command(TARGET ${_target} POST_BUILD
+        COMMAND "${CPPREF_DSYMUTIL}" "$<TARGET_FILE:${_target}>"
+        COMMENT "Generating dSYM for ${_target}"
+        VERBATIM)
+    endforeach()
   endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# Tests. gtest_discover_tests registers one ctest entry per TEST(). ui/ opens a
+# window and never returns, so it is registered but DISABLED -- run
+# ./ui_reflection by hand. pytest covers the llm/ CLI + MCP contract the Python
+# client depends on; see test/llm/test_contract.py.
+# ---------------------------------------------------------------------------
+enable_testing()
+include(GoogleTest)
+
+gtest_discover_tests(basic_reflection DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(undo_reflection DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(CppReflection DISCOVERY_MODE PRE_TEST)
+
+add_test(NAME ui COMMAND ui_reflection)
+set_tests_properties(ui PROPERTIES DISABLED TRUE LABELS manual)

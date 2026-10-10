@@ -11,9 +11,9 @@ signature:
               --parse <name>      <- the model's JSON, reconstructed struct out
 
 Usage:
-  python llm_client.py tools      [question]
-  python llm_client.py mcp        [--prompt NAME [key=value ...]] [--resource URI] [question]
-  python llm_client.py structured [request] [format]
+  python test/llm/scaffold/llm_client.py tools      [question]
+  python test/llm/scaffold/llm_client.py mcp        [--prompt NAME [key=value ...]] [--resource URI] [question]
+  python test/llm/scaffold/llm_client.py structured [request] [format]
 
 Positional order is strict: the first argument is always the request text, the
 second always the format (registered struct name, default "SearchRequest").
@@ -47,7 +47,9 @@ from langchain.mcp import MCPAdapter
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_deepseek import ChatDeepSeek
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# This file lives in test/llm/scaffold/; both the binary it drives and the .env
+# it reads sit at the repository root.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 BINARY = os.path.join(ROOT, "build", "CppReflection")
 MODEL = "deepseek-flash"
 

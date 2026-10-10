@@ -149,7 +149,7 @@ string-like `static_assert`), and resource templates carry no argument descripto
 
 ## Consuming it
 
-One dispatch — `test_entry::run_request` — serves the argv path and the socket
+One dispatch — `bridge::run_request` (`test/llm/scaffold/bridge.cpp`) — serves the argv path and the socket
 server, so a debugged session runs exactly what a plain invocation runs.
 
 | Command | Purpose |
@@ -160,12 +160,12 @@ server, so a debugged session runs exactly what a plain invocation runs.
 | `--serve [sock]` | long-running debug server (`/tmp/cpp_reflect.sock`) |
 
 Errors go to **stderr**, exit 1; `--mcp` routes before the generic `--*` branch
-(`main.cpp`) or it throws `unknown command: --mcp`.
+(`test/llm/scaffold/main.cpp`) or it throws `unknown command: --mcp`.
 
 ```sh
-python -m llm_client tools      [question]           # --emit-tools + --call
-python -m llm_client mcp        [--prompt NAME [k=v ...]] [--resource URI] [question]
-python -m llm_client structured [request] [format]   # strict positional; both or neither
+python test/llm/scaffold/llm_client.py tools      [question]           # --emit-tools + --call
+python test/llm/scaffold/llm_client.py mcp        [--prompt NAME [k=v ...]] [--resource URI] [question]
+python test/llm/scaffold/llm_client.py structured [request] [format]   # strict positional; both or neither
 ```
 
 `llm_client.py` never redeclares a C++ signature. `mcp` mode goes through
