@@ -6,9 +6,10 @@
 // integers, floats, strings, enums, optional, vector and array -- so a reflected
 // form works with no per-type UI code. Control<T> overrides any one of them, or
 // gives a user type a leaf widget instead of the default "nested struct" group.
-// A field may also carry a widget annotation -- [[= ui::slider{.v_min = 0, .v_max = 50}]]
-// -- to override its control per field; the annotation's member names are pinned
-// to the ImGui function the control calls. See docs/about_ui.md.
+// A field may also carry a widget annotation -- [[= ui::control{.fn = ^^ImGui::SliderInt, .v_min = 0, .v_max = 50}]]
+// -- to override its control per field. The annotation names the ImGui function
+// to call and carries that function's parameters as named members, checked by
+// reflection below. See docs/about_ui.md.
 
 #include <array>
 #include <cstddef>
@@ -17,7 +18,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -47,20 +50,13 @@ template <typename T>
 inline constexpr bool is_string_v = std::is_same_v<std::remove_cv_t<T>, std::string>;
 
 // --- leaf controls ----------------------------------------------------------
-// Control<T> is the override point. The header ships one for bool, every
-// arithmetic type and std::string; specialize it to change one of those or to
-// give a user type a leaf widget instead of the default nested-struct group.
+// Control<T> is the extension point for a leaf widget of the app's own: specialize
+// it to give a type one instead of the default nested-struct group. The library's
+// own widget for a type is not here but in `default_control` below -- the same
+// `ui::control` an annotation carries, so a named field and a bare value (a
+// sequence's element, an optional's inside) are drawn through one path.
 
 template <typename T> struct Control {};
-
-template <> struct Control<bool> {
-    void draw(bool& _value)
-    {
-        ImGui::PushID(std::addressof(_value));
-        ImGui::Checkbox("##bool", &_value);
-        ImGui::PopID();
-    }
-};
 
 /// The ImGui scalar tag for a given arithmetic type.
 template <typename T> constexpr ImGuiDataType imgui_data_type()
@@ -81,28 +77,6 @@ template <typename T> constexpr ImGuiDataType imgui_data_type()
         else return ImGuiDataType_U64;
     }
 }
-
-template <typename T>
-    requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
-struct Control<T> {
-    void draw(T& _value)
-    {
-        ImGui::PushID(std::addressof(_value));
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::DragScalar("##scalar", imgui_data_type<T>(), &_value);
-        ImGui::PopID();
-    }
-};
-
-template <> struct Control<std::string> {
-    void draw(std::string& _value)
-    {
-        ImGui::PushID(std::addressof(_value));
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##text", &_value);
-        ImGui::PopID();
-    }
-};
 
 template <typename T>
 concept has_control = requires(T& _value) { Control<T>{}.draw(_value); };
@@ -220,163 +194,261 @@ consteval std::string field_label()
     }
 }
 
-/// The parameter names of `Fn`, e.g. {"label","v","v_min","v_max","format","flags"}.
-template <std::meta::info Fn>
-consteval auto param_names()
+// One annotation, `ui::control`, names the function to call (`fn`) and carries that
+// function's parameters as named members. `label` and the value come from
+// the walk, `data_type` from the field's type. It holds the union of the
+// parameters across every supported function, so a member the named function does
+// not take is ignored -- set the ones it does.
+//   SliderInt(label, v, v_min, v_max, format, flags)
+//   SliderFloat(label, v, v_min, v_max, format, flags)
+//   SliderScalar(label, data_type, p_data, p_min, p_max, format, flags)
+//   DragInt(label, v, v_speed, v_min, v_max, format, flags)
+//   DragFloat(label, v, v_speed, v_min, v_max, format, flags)
+//   DragScalar(label, data_type, p_data, v_speed, p_min, p_max, format, flags)
+//   InputInt(label, v, step, step_fast, flags)
+//   InputDouble(label, v, step, step_fast, format, flags)
+//   InputScalar(label, data_type, p_data, p_step, p_step_fast, format, flags)
+//   Checkbox(label, v)
+//   InputText(label, str, flags, callback, user_data)   -- the std::string overload,
+//                                    pinned by a cast signature
+//   InputText(label, buf, buf_size, flags, callback, user_data)   -- the char array
+//                                    overload, pinned the same way
+// The members are declared in an order that matches the parameter order of every
+// supported function, because designated initializers must be written in
+// declaration order. They take the widest type the functions accept: `v_min` is
+// an int in SliderInt and a float in SliderFloat, so it is held as a double. A
+// `*Scalar` bound is a `const void*` to a value of the field's own type, so its
+// double is cast to that type at the call.
+struct control {
+    std::meta::info fn;           // the function to call (mandatory, first)
+    float v_speed = 1.0f;         // Drag*        -- before v_min, as in DragInt
+    double v_min = 0.0;           // Slider* / Drag*
+    double v_max = 0.0;
+    double step = 1.0;            // InputInt     -- its own step / step_fast defaults
+    double step_fast = 100.0;
+    double p_min = 0.0;           // *Scalar
+    double p_max = 0.0;
+    double p_step = 0.0;          // InputScalar
+    double p_step_fast = 0.0;
+};
+
+/// ImGui::InputText is overloaded, and reflection reaches neither overload by the
+/// plain `^^ImGui::InputText`: that names one of them by implementation choice (here
+/// the `(label, char* buf, size_t buf_size, ...)` one), and a function *type* would
+/// carry no parameter names. A reference cast pins an overload by its full signature
+/// -- default arguments do not shorten a function type, so every parameter is written
+/// out -- and reflect_function turns that back into the entity, names and all.
+using StringInputText = bool(const char*, std::string*, ImGuiInputTextFlags, ImGuiInputTextCallback, void*);
+consteval std::meta::info string_input_text()
 {
-    constexpr auto params = std::define_static_array(std::meta::parameters_of(Fn));
-    std::array<std::string_view, params.size()> out{};
-    std::size_t i = 0;
-    template for (constexpr std::meta::info p : params) {
-        constexpr auto id = std::meta::identifier_of(p);
-        out[i++] = std::string_view(id.data(), id.size());
-    }
-    return out;
+    return std::meta::reflect_function(static_cast<StringInputText&>(ImGui::InputText));
 }
 
-/// Every member of annotation type `A` names a parameter of `Fn`.
-template <std::meta::info A, std::meta::info Fn>
-consteval bool params_name_function_arguments()
+using CharPtrInputText = bool(const char*, char*, size_t, ImGuiInputTextFlags, ImGuiInputTextCallback, void*);
+consteval std::meta::info charptr_input_text()
 {
-    constexpr auto names = param_names<Fn>();
-    constexpr auto members =
-        std::define_static_array(std::meta::nonstatic_data_members_of(A, std::meta::access_context::unchecked()));
-    template for (constexpr std::meta::info m : members) {
-        constexpr auto id = std::meta::identifier_of(m);
-        constexpr std::string_view name(id.data(), id.size());
-        bool matched = false;
-        for (std::string_view n : names) {
-            if (n == name) {
-                matched = true;
+    return std::meta::reflect_function(static_cast<CharPtrInputText&>(ImGui::InputText));
+}
+
+/// The functions `ui::control` can drive: each takes a label and a value parameter
+/// named `v`, `p_data`, `str` or `buf` (a char array also gives `buf_size`), and
+/// `fn` must be one of them.
+inline constexpr std::array control_functions{
+    ^^ImGui::SliderInt,  ^^ImGui::SliderFloat, ^^ImGui::SliderScalar,
+    ^^ImGui::DragInt,    ^^ImGui::DragFloat,   ^^ImGui::DragScalar,
+    ^^ImGui::InputInt,   ^^ImGui::InputDouble, ^^ImGui::InputScalar,
+    ^^ImGui::Checkbox,   string_input_text(),  charptr_input_text(),
+};
+
+template <std::meta::info Fn>
+consteval bool is_control_function()
+{
+    bool found = false;
+    template for (constexpr std::meta::info f : control_functions) {
+        if constexpr (Fn == f) {
+            found = true;
+        }
+    }
+    return found;
+}
+
+/// Every member `control` can name must be a parameter of some supported
+/// function, so a typo in the struct is caught here rather than silently ignored
+/// at every use site.
+consteval bool control_members_are_parameters()
+{
+    for (std::meta::info member :
+         std::meta::nonstatic_data_members_of(^^control, std::meta::access_context::unchecked())) {
+        const std::string_view name = std::meta::identifier_of(member);
+        if (name == "fn") {
+            continue;
+        }
+        bool named = false;
+        for (std::meta::info f : control_functions) {
+            for (std::meta::info p : std::meta::parameters_of(f)) {
+                if (name == std::meta::identifier_of(p)) {
+                    named = true;
+                }
             }
         }
-        if (!matched) {
+        if (!named) {
             return false;
         }
     }
     return true;
 }
+static_assert(control_members_are_parameters(),
+              "every ui::control member must name a parameter of a supported ImGui function");
 
-// The control's parameters, as named members. The names mirror the ImGui
-// function each control calls, so `[[= ui::slider{.v_min = 0, .v_max = 50}]]`
-// reads as SliderInt's own arguments:
-//   SliderInt(label, v, v_min, v_max, format, flags)
-//   DragInt(label, v, v_speed, v_min, v_max, format, flags)
-//   InputInt(label, v, step, step_fast, flags)
-//   Checkbox(label, v)
-struct slider {
-    int v_min = 0;
-    int v_max = 100;
+/// The control a value's type is drawn with when no annotation names one. Written
+/// the same way an annotation is -- a `ui::control` naming a function -- so the
+/// walk and a bare value reach ImGui through one path.
+template <typename T> struct default_control {};
+template <> struct default_control<bool> {
+    static constexpr control value{ .fn = ^^ImGui::Checkbox };
 };
-struct drag {
-    float v_speed = 1.0f;
-    int v_min = 0;
-    int v_max = 0;
-};
-struct input {
-    int step = 1;
-    int step_fast = 100;
-};
-struct checkbox {};
-
-static_assert(params_name_function_arguments<^^slider, ^^ImGui::SliderInt>(),
-              "ui::slider's members must name parameters of ImGui::SliderInt");
-static_assert(params_name_function_arguments<^^drag, ^^ImGui::DragInt>(),
-              "ui::drag's members must name parameters of ImGui::DragInt");
-static_assert(params_name_function_arguments<^^input, ^^ImGui::InputInt>(),
-              "ui::input's members must name parameters of ImGui::InputInt");
-static_assert(params_name_function_arguments<^^checkbox, ^^ImGui::Checkbox>(),
-              "ui::checkbox's members must name parameters of ImGui::Checkbox");
-
-/// The annotated controls, each calling the ImGui entry point for the field's
-/// type with the parameters the annotation supplied.
 template <typename T>
-void draw_control(T& _value, const slider& _cfg)
+    requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
+struct default_control<T> {
+    static constexpr control value{ .fn = ^^ImGui::DragScalar };
+};
+template <> struct default_control<std::string> {
+    static constexpr control value{ .fn = string_input_text() };
+};
+/// A char array is the other InputText: the buffer itself plus its size, which the
+/// binder takes from the array's extent.
+template <std::size_t N> struct default_control<char[N]> {
+    static constexpr control value{ .fn = charptr_input_text() };
+};
+
+template <typename T>
+concept has_default_control = requires { default_control<T>::value; };
+
+/// Where a control's parameter values come from: a field's own annotation, or the
+/// default for a value's type (`draw` reaches a value with no field around it).
+template <std::meta::info Field> struct field_control {};
+template <typename T> struct type_control {};
+
+template <typename Source> struct control_traits;
+template <std::meta::info Field> struct control_traits<field_control<Field>> {
+    static consteval std::meta::info function() { return annotation_value<^^control, Field>().fn; }
+    template <std::meta::info Member> static consteval auto member()
+    {
+        return annotation_value<^^control, Field>().[:Member:];
+    }
+};
+template <typename T> struct control_traits<type_control<T>> {
+    static consteval std::meta::info function() { return default_control<T>::value.fn; }
+    template <std::meta::info Member> static consteval auto member()
+    {
+        return default_control<T>::value.[:Member:];
+    }
+};
+
+// --- calling a control -------------------------------------------------------
+// Parameter introspection, as in the JSON layer's tool call.
+
+template <std::meta::info Fn>
+consteval std::size_t param_count()
 {
-    static_assert(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>, "ui::slider: an arithmetic field");
+    return std::meta::parameters_of(Fn).size();
+}
+
+template <std::meta::info Fn, std::size_t I>
+consteval std::meta::info param_at()
+{
+    return std::meta::parameters_of(Fn)[I];
+}
+
+template <std::meta::info Fn, std::size_t I>
+using param_type_at = std::remove_cvref_t<typename[:std::meta::type_of(param_at<Fn, I>()):]>;
+
+/// The member of annotation `A` naming parameter `P`, or {} when the annotation
+/// does not name it and the parameter keeps its zero value.
+template <std::meta::info A, std::meta::info P>
+consteval std::meta::info control_argument_of()
+{
+    for (std::meta::info m : std::meta::nonstatic_data_members_of(A, std::meta::access_context::unchecked())) {
+        if (std::meta::identifier_of(m) == std::meta::identifier_of(P)) {
+            return m;
+        }
+    }
+    return {};
+}
+
+/// Fills argument `I` of `Fn`. `label` and the value come from the walk, the data
+/// type from the value's type. Every other parameter comes from the control's
+/// member of that name, read out of the consteval-only `control` as a plain value;
+/// one no member names stays default-constructed, which is what ImGui's own
+/// `format` / `flags` defaults (`NULL` and `0`) mean anyway.
+template <typename Source, std::meta::info Fn, std::size_t I, typename T, typename Storage>
+void bind_argument(Storage& _storage, auto& _args, const char* _label, T& _value)
+{
+    using PT = param_type_at<Fn, I>;
+    constexpr std::string_view name = std::define_static_string(std::meta::identifier_of(param_at<Fn, I>()));
+    constexpr std::meta::info member = control_argument_of<^^control, param_at<Fn, I>()>();
+    if constexpr (name == "label") {
+        std::get<I>(_args) = _label;
+    } else if constexpr (name == "v" || name == "p_data" || name == "str") {
+        static_assert(std::is_same_v<std::remove_cv_t<std::remove_pointer_t<PT>>, T> ||
+                          std::is_void_v<std::remove_cv_t<std::remove_pointer_t<PT>>>,
+                      "the controlled value's type must be the one this function takes");
+        std::get<I>(_args) = static_cast<PT>(std::addressof(_value));
+    } else if constexpr (name == "buf") {
+        // The char array itself, which decays to the char* the function takes.
+        static_assert(std::is_array_v<T>, "a buf parameter wants a char array");
+        std::get<I>(_args) = static_cast<PT>(_value);
+    } else if constexpr (name == "buf_size") {
+        // ...and its extent, the array being the buffer.
+        static_assert(std::is_array_v<T>, "a buf_size parameter comes from a char array's extent");
+        std::get<I>(_args) = static_cast<PT>(std::extent_v<T>);
+    } else if constexpr (name == "data_type") {
+        std::get<I>(_args) = imgui_data_type<T>();
+    } else if constexpr (member != std::meta::info{}) {
+        constexpr auto raw = control_traits<Source>::template member<member>();
+        if constexpr (std::is_pointer_v<PT>) {
+            // A *Scalar bound: the function reads a value of the value's own type
+            // through the pointer, so that value lives in `_storage` for the call.
+            static_assert(std::is_void_v<std::remove_cv_t<std::remove_pointer_t<PT>>>,
+                          "a bound pointer parameter must be a void* to the value's type");
+            _storage[I] = static_cast<T>(raw);
+            std::get<I>(_args) = static_cast<PT>(std::addressof(_storage[I]));
+        } else {
+            std::get<I>(_args) = static_cast<PT>(raw);
+        }
+    }
+}
+
+template <typename Source, typename T, std::size_t... Is>
+void invoke_impl(const char* _label, T& _value, std::index_sequence<Is...>)
+{
+    constexpr std::meta::info fn = control_traits<Source>::function();
+    std::tuple<param_type_at<fn, Is>...> args{};
+    // One slot per parameter, for a bound pointer parameter to point at.
+    std::array<T, sizeof...(Is)> storage{};
+    (bind_argument<Source, fn, Is>(storage, args, _label, _value), ...);
+    std::apply(&[:fn:], args);
+}
+
+/// Draws a value through a control: the function its annotation (or its type's
+/// default) named, with the parameters that control carries. `_label` is the hidden
+/// ImGui label -- the visible one is drawn by the walk, in its own column.
+template <typename Source, typename T>
+void draw_control(const char* _label, T& _value)
+{
+    constexpr std::meta::info fn = control_traits<Source>::function();
+    static_assert(is_control_function<fn>(), "ui::control: fn must be a supported function");
     ImGui::PushID(std::addressof(_value));
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if constexpr (std::is_same_v<T, int>) {
-        ImGui::SliderInt("##slider", &_value, _cfg.v_min, _cfg.v_max);
-    } else if constexpr (std::is_same_v<T, float>) {
-        ImGui::SliderFloat("##slider", &_value, static_cast<float>(_cfg.v_min), static_cast<float>(_cfg.v_max));
-    } else {
-        const T lo = static_cast<T>(_cfg.v_min);
-        const T hi = static_cast<T>(_cfg.v_max);
-        ImGui::SliderScalar("##slider", imgui_data_type<T>(), &_value, &lo, &hi);
-    }
+    invoke_impl<Source>(_label, _value, std::make_index_sequence<param_count<fn>()>());
     ImGui::PopID();
 }
 
-template <typename T>
-void draw_control(T& _value, const drag& _cfg)
-{
-    static_assert(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>, "ui::drag: an arithmetic field");
-    ImGui::PushID(std::addressof(_value));
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if constexpr (std::is_same_v<T, int>) {
-        ImGui::DragInt("##drag", &_value, _cfg.v_speed, _cfg.v_min, _cfg.v_max);
-    } else if constexpr (std::is_same_v<T, float>) {
-        ImGui::DragFloat("##drag", &_value, _cfg.v_speed, static_cast<float>(_cfg.v_min), static_cast<float>(_cfg.v_max));
-    } else {
-        const T lo = static_cast<T>(_cfg.v_min);
-        const T hi = static_cast<T>(_cfg.v_max);
-        ImGui::DragScalar("##drag", imgui_data_type<T>(), &_value, _cfg.v_speed, &lo, &hi);
-    }
-    ImGui::PopID();
-}
-
-template <typename T>
-void draw_control(T& _value, const input& _cfg)
-{
-    static_assert(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>, "ui::input: an arithmetic field");
-    ImGui::PushID(std::addressof(_value));
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if constexpr (std::is_same_v<T, int>) {
-        ImGui::InputInt("##input", &_value, _cfg.step, _cfg.step_fast);
-    } else if constexpr (std::is_same_v<T, double>) {
-        ImGui::InputDouble("##input", &_value, _cfg.step, _cfg.step_fast);
-    } else {
-        const T step = static_cast<T>(_cfg.step);
-        const T step_fast = static_cast<T>(_cfg.step_fast);
-        ImGui::InputScalar("##input", imgui_data_type<T>(), &_value, &step, &step_fast);
-    }
-    ImGui::PopID();
-}
-
-inline void draw_control(bool& _value, const checkbox&)
-{
-    ImGui::PushID(std::addressof(_value));
-    ImGui::Checkbox("##checkbox", &_value);
-    ImGui::PopID();
-}
-
-template <typename T>
-void draw_control(T&, const checkbox&)
-{
-    static_assert(!sizeof(T), "ui::checkbox: a bool field");
-}
-
+/// Whether the field carries a ui::control annotation.
 template <std::meta::info Field>
 consteval bool is_widget_annotated()
 {
-    return has_annotation<^^slider, Field>() || has_annotation<^^drag, Field>() ||
-           has_annotation<^^input, Field>() || has_annotation<^^checkbox, Field>();
-}
-
-/// Draws a field through whichever control its annotation named.
-template <std::meta::info Field, typename T>
-void draw_annotated(T& _value)
-{
-    if constexpr (has_annotation<^^slider, Field>()) {
-        draw_control(_value, annotation_value<^^slider, Field>());
-    } else if constexpr (has_annotation<^^drag, Field>()) {
-        draw_control(_value, annotation_value<^^drag, Field>());
-    } else if constexpr (has_annotation<^^input, Field>()) {
-        draw_control(_value, annotation_value<^^input, Field>());
-    } else if constexpr (has_annotation<^^checkbox, Field>()) {
-        draw_control(_value, annotation_value<^^checkbox, Field>());
-    }
+    return has_annotation<^^control, Field>();
 }
 
 // --- the enum combo ---------------------------------------------------------
@@ -520,13 +592,15 @@ void field_row(const std::string& _label, Fn&& _widget)
 }
 
 /// Draws one value: a class as a collapsible group over its field table, an
-/// enum, optional or sequence through its built-in widget, anything else
-/// through Control<T>.
+/// enum, optional or sequence through its built-in widget, anything else through
+/// its type's default control -- or Control<T>, if the app gave it one.
 template <typename T>
 void draw(T& _object)
 {
     if constexpr (has_control<T>) {
         Control<T>{}.draw(_object);
+    } else if constexpr (has_default_control<T>) {
+        draw_control<type_control<T>>("##value", _object);
     } else if constexpr (is_optional<T>::value) {
         draw_optional(_object);
     } else if constexpr (is_sequence<T>::value) {
@@ -578,7 +652,7 @@ void draw_members(T& _object)
             const std::string member_label = field_label<field>();
 
             if constexpr (is_widget_annotated<field>()) {
-                field_row(member_label, [&] { draw_annotated<field>(_object.[:field:]); });
+                field_row(member_label, [&] { draw_control<field_control<field>>("##value", _object.[:field:]); });
             } else if constexpr (is_nested_struct_v<typename[:fty:]>) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();

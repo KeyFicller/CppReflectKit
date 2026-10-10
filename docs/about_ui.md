@@ -2,7 +2,7 @@
 
 Walk a struct's members (and its bases) by reflection and draw one widget per field
 type; nested structs become collapsible groups. The one idea: **a field's type picks
-its widget — by a built-in control, the reflected enum set, or a `Control<T>` you
+its widget — by a default control, the reflected enum set, or a `Control<T>` you
 specialize — so laying out a form needs no per-member UI code.** Build prerequisites:
 [`../ReadMe.md`](../ReadMe.md).
 
@@ -23,10 +23,12 @@ struct MyStruct : MyBaseStruct {
 ```cpp
 // All you add — one call, plus an annotation on any field you want to tune:
 struct MyForm : MyStruct {
-    [[= ui::label{.text = ui::str("Input voltage")}]]                // human label
-    [[= ui::slider{.v_min = -10, .v_max = 10}]] int m_volts;         // SliderInt's args
-    [[= ui::drag{.v_speed = 0.5f, .v_min = -100, .v_max = 100}]] int m_mem_drag;
-    [[= ui::checkbox{}]] bool m_mem_check;
+    [[= ui::label{.text = ui::str("Input voltage")}]]                       // human label
+    [[= ui::control{.fn = ^^ImGui::SliderInt, .v_min = -10, .v_max = 10}]]  // SliderInt's args
+        int m_volts;
+    [[= ui::control{.fn = ^^ImGui::DragInt, .v_speed = 0.5f, .v_min = -100, .v_max = 100}]]
+        int m_mem_drag;
+    [[= ui::control{.fn = ^^ImGui::Checkbox}]] bool m_mem_check;
 };
 
 ui::draw(form);   // labelled sliders, checks, enum combos, lists and nested groups,
@@ -37,45 +39,94 @@ A `label` annotation is the natural one: without it the reflected member name is
 (`m_volts`); with it, that text replaces the name. The control annotations are
 orthogonal — a field can carry both.
 
-Override a built-in type-wide only where the app wants something specific — here a
-slider instead of the default drag field:
+An annotation is **per field**. To change a widget for a whole *type*, there are two
+routes. For a type the control vocabulary already covers, specialize `default_control<T>`
+— it holds the same `control` an annotation does, so the whole form changes at once:
 
 ```cpp
 namespace ui {
-template <> struct Control<int> {
-    void draw(int& value) { ImGui::SliderInt("##slider", &value, 0, 100); }
+// every int in the form becomes a bounded slider, not a drag
+template <> struct default_control<int> { static constexpr control value{ .fn = ^^ImGui::SliderInt, .v_min = -10, .v_max = 10 }; };
+}
+```
+
+For a type of the app's own, specialize `Control<T>`, whose `draw` may call any ImGui API
+and makes the type a leaf rather than a nested group:
+
+```cpp
+struct Vec2 { float x; float y; };
+namespace ui {
+template <> struct Control<Vec2> {
+    void draw(Vec2& v) { ImGui::DragFloat2("##vec", &v.x); }   // a leaf, not a nested group
 };
 }
 ```
 
+`Vec2` needs the second route: a `default_control` may only name a function from the
+vocabulary, and no supported function takes a `Vec2*` (`DragFloat2` wants a `float*`), so a
+`Vec2` widget has to be `Control<T>`.
+
 ## How the derivation works
 
-**1. `Control<T>` is the leaf map.** The header ships controls for `bool`, every
-arithmetic type and `std::string`; `Control<T>` is the override point, and a type
-that is neither built-in nor a reflected class is a compile error where it would be
-drawn:
+**1. The leaf map is a default `ui::control` per type.** Every type the walk draws as a
+leaf has a `control` naming the ImGui function to call, so a named field and a bare
+value (a sequence's element, an optional's inside) reach ImGui through one path:
 
 ```cpp
-template <typename T> struct Control {};
+template <typename T> struct default_control {};
+template <> struct default_control<bool> { static constexpr control value{ .fn = ^^ImGui::Checkbox }; };
 template <typename T> requires(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>)
-struct Control<T> { void draw(T& v) { ImGui::DragScalar("##scalar", imgui_data_type<T>(), &v); } };
+struct default_control<T> { static constexpr control value{ .fn = ^^ImGui::DragScalar }; };
+template <std::size_t N> struct default_control<char[N]> { static constexpr control value{ .fn = charptr_input_text() }; };
 ```
+
+Both text types go through `ImGui::InputText`, whose name is overloaded: the
+`(label, char* buf, size_t buf_size, ...)` one and the `(label, std::string* str, ...)`
+one. A bare `^^ImGui::InputText` picks one of them by implementation choice, and
+reflection of a function *type* would carry no parameter names — which the binder needs.
+So each overload is pinned by a reference cast to its full signature (default arguments
+do not shorten a function type, so every parameter is written out) and turned back into
+an entity by `reflect_function`:
+
+```cpp
+using StringInputText  = bool(const char*, std::string*, ImGuiInputTextFlags, ImGuiInputTextCallback, void*);
+using CharPtrInputText = bool(const char*, char*, size_t, ImGuiInputTextFlags, ImGuiInputTextCallback, void*);
+consteval std::meta::info string_input_text()  { return std::meta::reflect_function(static_cast<StringInputText&>(ImGui::InputText)); }
+consteval std::meta::info charptr_input_text() { return std::meta::reflect_function(static_cast<CharPtrInputText&>(ImGui::InputText)); }
+template <> struct default_control<std::string> { static constexpr control value{ .fn = string_input_text() }; };
+```
+
+The pinned entities keep their parameter names, so they flow through the same binder.
+The char array decays to the overload's `buf` parameter and `buf_size` is the array's
+extent — both from the field's type. The value parameter is named `str` for a
+`std::string` and `buf` (plus `buf_size`) for a `char[N]`, the names the binder accepts
+beyond `v` / `p_data`.
+
+A type with neither a default nor an annotation is a compile error where it would be
+drawn; `Control<T>` is the app's leaf widget for a type the control vocabulary cannot
+express.
 
 **2. `draw` picks the branch from the reflected type.** One `if constexpr` chain, the
 same shape as the JSON layer's `param_schema`: a specialized control wins, then the
-structured types, then a nested class, else `static_assert`:
+type's default control, then the structured types, then a nested class, else
+`static_assert`:
 
 ```cpp
 template <typename T> void draw(T& _object)
 {
-    if constexpr (has_control<T>)         Control<T>{}.draw(_object);
-    else if constexpr (is_optional<T>)    draw_optional(_object);
-    else if constexpr (is_sequence<T>)    draw_sequence(_object);
-    else if constexpr (std::is_enum_v<T>) draw_enum(_object);
-    else if constexpr (std::is_class_v<T>) { /* collapsible header over a two-column field table */ }
-    else static_assert(!sizeof(T), "ui::draw: no Control<T> …");
+    if constexpr (has_control<T>)              Control<T>{}.draw(_object);
+    else if constexpr (has_default_control<T>) draw_control<type_control<T>>("##value", _object);
+    else if constexpr (is_optional<T>)         draw_optional(_object);
+    else if constexpr (is_sequence<T>)         draw_sequence(_object);
+    else if constexpr (std::is_enum_v<T>)      draw_enum(_object);
+    else if constexpr (std::is_class_v<T>)     { /* collapsible header over a two-column field table */ }
+    else static_assert(!sizeof(T), "ui::draw: no widget for T …");
 }
 ```
+
+Where a field's own annotation names a control, that control is read instead of the
+type default — `draw_control` takes the source as a parameter, `field_control<Field>` or
+`type_control<T>`, and `control_traits` reads the parameters out of whichever it is.
 
 **3. The enum combo is spliced from the declaration.** `enumerators_of` gives both
 the names (packed for `ImGui::Combo`) and the values (for the index round-trip), so
@@ -104,22 +155,52 @@ template for (constexpr std::meta::info field : fields) {
 own address, so the same type drawn many times in one window still gets distinct
 widget IDs — the usual ImGui requirement, handled once in the walk.
 
-**6. An annotation overrides the widget per field.** `find_annotation` scans
-`annotations_of(field)` for a ui control type, and the annotation's members are the
-control's parameters. The member **names** are tied to the ImGui function the control
-calls, and a `static_assert` reflects that function to enforce it — so a parameter
-cannot drift from the API:
+**6. The annotation names the ImGui function; the call is generic.** One annotation,
+`ui::control`, whose first member is the function to call (`fn`) and whose remaining
+members are that function's parameter names:
 
 ```cpp
-struct slider { int v_min = 0; int v_max = 100; };   // named after SliderInt's params
-static_assert(params_name_function_arguments<^^slider, ^^ImGui::SliderInt>(), …);
-
-// in the walk: an annotated field uses its control, the rest fall back to the type
-if constexpr (is_widget_annotated<field>()) draw_annotated<field>(_object.[:field:]);
+[[= ui::control{.fn = ^^ImGui::SliderInt, .v_min = -10, .v_max = 10}]] int m_volts;
+[[= ui::control{.fn = ^^ImGui::Checkbox}]] bool m_armed;
 ```
 
-The annotation is read entirely at compile time (`meta::extract`), so a misspelled key
-is a build error, not a silently ignored option.
+`control` holds the **union** of the parameters across the functions `fn` may name
+(`control_functions`, which includes the pinned `InputText` overloads above);
+a member the named function does not take is simply ignored. The
+members use the widest type the functions accept — `v_min` is an int in `SliderInt` and
+a float in `SliderFloat`, so it is held as a `double` — and the call casts each to the
+parameter's own type.
+
+Drawing an annotated field is then one generic call, and so is drawing a bare value
+through its type's default: `label` and the value come from the walk, `data_type` from
+the value's type, and every other argument is bound to the control member of that name —
+read out of whichever source the control came from. A parameter no member names stays
+default-constructed, which is what ImGui's own `format` / `flags` defaults (`NULL` and
+`0`) mean anyway:
+
+```cpp
+// the control holds a reflection, so its type is consteval-only and must not reach
+// the runtime call: control_traits reads each value in a consteval helper.
+constexpr std::meta::info fn = control_traits<Source>::function();
+invoke_impl<Source>(_label, _value, std::make_index_sequence<param_count<fn>()>());
+// invoke_impl → args tuple of the function's parameter types, bound by name, then
+// std::apply(&[:fn:], args)  — the shape of the JSON layer's invoke_with_json, with
+// the control standing in for the model's arguments.
+```
+
+`Source` is `field_control<Field>` for a field's own annotation and `type_control<T>` for
+a type's default, so an annotated field, an unannotated one and a bare value all leave
+through this one call.
+
+Two `static_assert`s hold the vocabulary in place: every `control` member must name a
+parameter of some supported function (`control_members_are_parameters`), and every use
+site's `fn` must be one of them (`is_control_function`). The value's type is checked
+against the function too — `fn = ^^ImGui::Checkbox` on an `int` fails, because
+`Checkbox` takes a `bool*`.
+
+Because `control` is generic, a member the named function does not take is not caught:
+`{.fn = ^^ImGui::SliderInt, .step = 5}` compiles and ignores `step`. That is the price
+of one struct instead of one per function.
 
 **7. `label` is the same mechanism, for the display name.** It carries a compile-time
 string (`ui::str`), so its type is a specialization (`label<N>`) rather than a fixed
@@ -140,13 +221,15 @@ comes back empty at run time, so the label silently disappears. Keep the query i
 
 ## What is derived, per type
 
-`draw` branches on the reflected field type; a leaf consults `Control<T>`:
+`draw` branches on the reflected field type; a leaf goes through its type's default
+control, or `Control<T>` when the app specialized one:
 
 | Field type | Drawn as |
 |---|---|
 | `bool` | a checkbox |
-| integer / floating-point | a drag field (`Control<T>`, overridable) |
-| `std::string` | a text field |
+| integer / floating-point | a drag field (`default_control`, overridable) |
+| `std::string` | a text field (the pinned `InputText` overload) |
+| `char[N]` | a text field (the pinned `buf` / `buf_size` overload) |
 | an enum | a combo of the reflected enumerators |
 | `std::optional<T>` | a presence checkbox, then `T` when present |
 | `std::vector<T>` | per-element widgets with `+ Add` / `x` |
@@ -154,6 +237,7 @@ comes back empty at run time, so the label silently disappears. Keep the query i
 | a class with no `Control<T>` | a `CollapsingHeader`, recursed into |
 | a base class | its members, inlined in the derived object |
 | a field with a **control annotation** | that control, driven by the annotation's parameters |
+| a type with a **`Control<T>`** | that control, as a leaf rather than a nested group |
 | anything else | a `static_assert` at the point of use |
 
 The recursion is the whole layout: a struct with a nested struct draws a group inside
@@ -161,8 +245,10 @@ a group, to any depth, from the declarations alone.
 
 ## Consuming it
 
-The library is `lib/inc/ui/reflection_widgets.h`; the demo data, one type-wide override
-and the annotated fields are `test/ui/scaffold/reflection_widgets.h`. Opening a window
+The library is `lib/inc/ui/reflection_widgets.h`; the demo data and the annotated
+fields are `test/ui/scaffold/reflection_widgets.h`. Overriding a widget type-wide
+instead of per field is a `default_control<T>` when the control vocabulary covers it, or
+a `Control<T>` specialization when it does not. Opening a window
 means the target cannot run unattended, so `ui` is registered with CTest but
 **disabled** — run it directly:
 
@@ -173,8 +259,10 @@ cmake --build build --target ui_reflection
 
 Because the target cannot run under CTest, the annotation path is verified at compile
 time instead: `test/ui/test_reflection_widgets.cpp` asserts that each annotation is
-read and its values come through (`ui::annotation_value<…>().v_min == -10`), and the
-header's `static_assert` proves a bad key name is rejected.
+read and its values come through (`ui::annotation_value<…>().v_min == -10`), that the
+annotation names the function it should (`…().fn == ^^ImGui::SliderInt`), and that the
+vocabulary still holds (`control_members_are_parameters`, `is_control_function`), so a
+typo in `control` or an unsupported `fn` is rejected at build time.
 
 `ui_reflection` (`test/ui/main.cpp`) calls `ui_reflection()`, which passes a draw
 callback to `run_imgui_demo_window` in the backend scaffold
