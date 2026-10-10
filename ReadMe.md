@@ -17,18 +17,6 @@ from the declaration:
 
 Each library has a design note beside it in `docs/`.
 
-## Build
-
-- Build a full `clang-p2996` install and set `LLVM_ROOT` to it: the prefix must
-  contain `bin/clang++`, the reflective `include/c++/v1/meta` header and
-  `lib/libc++.dylib`.
-- Execute below command to generate executable.
-
-```sh
-cmake -S . -B build -G Ninja  #   Or "cmake.generator": "Ninja" in .vscode/settings.json
-cmake --build build
-```
-
 ## Libraries
 
 ### `undo::` — undo/redo (`reflection_undo.h`)
@@ -80,7 +68,8 @@ account.get_m_log();                  // {}
 
 Walk a struct's members (and bases) by reflection and draw one ImGui widget per
 field type; nested structs become collapsible groups, all in a two-column field
-table.
+table. Where the type's default is not the one you want, an annotation on the
+field names the ImGui function instead — the widget is data, not code.
 
 **What you already have:** a hand-written ImGui call per member — the items list
 for the enum, the presence box for the optional, the row loop for the vector, all
@@ -99,8 +88,9 @@ ImGui::TextUnformatted("Weight"); ImGui::SameLine();
 ImGui::SliderInt("##weight", &profile.m_weight, 0, 100);
 ```
 
-**What you add:** the struct — its field types pick the widgets, and one call
-draws them:
+**What you add:** the struct — its field types pick the widgets, one call draws
+them, and a `ui::control` on a field swaps in a different ImGui function, its
+parameters named as it declares them:
 
 ```cpp
 struct Profile {
@@ -111,15 +101,19 @@ struct Profile {
     bool m_active = false;              // bool     -> a checkbox
 
     [[= ui::label{ .text = ui::str("Weight") } ]]                    // rename this field
-    [[= ui::control{ .fn = ^^ImGui::SliderInt, .v_min = 0.0, .v_max = 100.0 } ]]
-    int m_weight = 50;                  // annotation -> a slider, not the default drag
+    [[= ui::control{ .fn = ^^ImGui::SliderInt, .v_min = 0.0, .v_max = 100.0 }]]
+        int m_weight = 50;              // a drag by default; this is a slider
+
+    [[= ui::control{ .fn = ^^ImGui::InputInt, .step = 1.0, .step_fast = 10.0 }]]
+        int m_retries = 3;              // a third function, its own parameters
 };
 
 ui::draw(profile);   // one widget per field, in declaration order
 ```
 
 **What you get:** the whole form — labels in a fixed column, widgets in a
-stretching one, one row per field, every control derived from its type:
+stretching one, one row per field, every control derived from its type or its
+annotation:
 
 ```
 m_name    [ Alice              ]
@@ -130,6 +124,29 @@ m_tags    [x] 1
 m_limit   [x] [ 12 ]
 m_active  [x]
 Weight    [======50======]
+m_retries [ 3 ] [+10]
+```
+
+One annotation, `ui::control`: `fn` is the function, the rest are that function's
+parameters by name, so `SliderInt` takes `v_min`/`v_max` and `InputInt` takes
+`step`/`step_fast` — a member `fn` does not take is ignored. It is checked at
+compile time: an `fn` outside the vocabulary, or one whose value parameter does
+not match the field's type, is a `static_assert`.
+
+To change the widget for a whole **type** rather than one field, that is one
+specialization instead of an annotation on every use — `default_control<T>` for a
+type the vocabulary already covers, `Control<T>` for one of your own:
+
+```cpp
+struct Vec2 { float x; float y; };
+namespace ui {
+template <> struct default_control<int> {           // every int in the form
+    static constexpr control value{ .fn = ^^ImGui::SliderInt, .v_min = 0, .v_max = 100 };
+};
+template <> struct Control<Vec2> {                   // a leaf, not a nested group
+    void draw(Vec2& v) { ImGui::DragFloat2("##vec", &v.x); }
+};
+}
 ```
 
 ### `js::` — JSON schema and decoding (`reflection_json.h`)
@@ -247,8 +264,58 @@ name, schema, `required` and the call all derived from the signatures:
   "description": "Design notes.", "mimeType": "text/markdown" }
 ```
 
+## Build
+
+- Build a full `clang-p2996` install and point the build at it — the prefix must
+  contain `bin/clang++`, the reflective `include/c++/v1/meta` header and
+  `lib/libc++.dylib`. It is found in this order: `-DCPPREF_LLVM_ROOT=`, the
+  `CPPREF_LLVM_ROOT` environment variable, the prefix of the compiler in use, a
+  `clang++` on `PATH`. To pin a machine-specific prefix, copy
+  `CMakeUserPresets.json.example` to the gitignored `CMakeUserPresets.json` and
+  fill in `CPPREF_LLVM_ROOT`, then use `cmake --preset local`.
+- Execute below command to generate executable.
+
+```sh
+cmake --preset local          # or "default", when CPPREF_LLVM_ROOT is already exported
+cmake --build --preset local
+```
+
+## Consume from another project
+
+The four libraries are `INTERFACE` targets, so an external project links one name
+and its headers, dependencies and compiler flags come with it:
+
+```cmake
+include(FetchContent)
+FetchContent_Declare(cppreflect
+  GIT_REPOSITORY  <this repository>
+  GIT_TAG         <commit>)
+FetchContent_MakeAvailable(cppreflect)
+
+target_link_libraries(app PRIVATE cppreflect::json)   # also brings nlohmann/json
+```
+
+| Target | Needs |
+|---|---|
+| `cppreflect::undo` | — |
+| `cppreflect::ui` | Dear ImGui |
+| `cppreflect::json` | nlohmann/json |
+| `cppreflect::mcp` | `cppreflect::json` |
+
+Each target carries `lib/inc`, `-freflection-latest`, C++26 and the compiler's
+SDK / libc++ paths, so nothing is configured twice; the consumer only has to
+build with `clang-p2996` itself. `nlohmann/json` and Dear ImGui are taken from
+`find_package` first and fetched only when missing, and an import builds none of
+this project's tests. A slimmer import turns the optional halves off:
+
+```sh
+cmake -DCPPREF_WITH_UI=OFF -DCPPREF_WITH_LLM=OFF ...   # then only cppreflect::undo exists
+```
+
+`add_subdirectory(path/to/CppReflection)` works the same way.
+
 ## Design notes
 
-- [`docs/about_llm.md`](docs/about_llm.md) — JSON schema, MCP tools/prompts/resources, and the LLM bridge.
-- [`docs/about_ui.md`](docs/about_ui.md) — the widget walk, control annotations and overrides.
 - [`docs/about_undo.md`](docs/about_undo.md) — the member/index codec, commands and transactions.
+- [`docs/about_ui.md`](docs/about_ui.md) — the widget walk, control annotations and overrides.
+- [`docs/about_llm.md`](docs/about_llm.md) — JSON schema, MCP tools/prompts/resources, and the LLM bridge.

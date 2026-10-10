@@ -1,0 +1,24 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "local",
+      "inherits": "default",
+      "description": "Machine-local. Replace CPPREF_LLVM_ROOT with your clang-p2996 install prefix (the one containing bin/clang++, include/c++/v1/meta and lib/libc++.dylib).",
+      "environment": { "CPPREF_LLVM_ROOT": "/path/to/llvm-p2996" }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "local",
+      "configurePreset": "local"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "local",
+      "configurePreset": "local",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

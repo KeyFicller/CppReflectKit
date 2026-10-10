@@ -3,6 +3,7 @@ build/*
 .reference/*
 imgui.ini
 .env
+CMakeUserPresets.json
 .venv/*
 __pycache__/
 .cursor/*
