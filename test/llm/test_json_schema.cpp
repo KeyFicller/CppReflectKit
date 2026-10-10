@@ -181,8 +181,7 @@ TEST(JsonSchema, descriptions_come_from_the_annotations)
     const auto& props = tool->at("function").at("parameters").at("properties");
     expect_description(props, "query", "The raw query text.");
     expect_description(props, "limit", "Maximum number of hits to return.");
-    expect_description(props, "exact_match", "Require an exact match.");
-    expect_description(props, "unit", "Optional unit filter.");
+    expect_description(props, "exact_match", "Require an exact (case-sensitive) match.");
 
     const auto query = parse_json(query_schema);
     ASSERT_TRUE(query.has_value());
@@ -237,31 +236,22 @@ TEST(JsonSchema, json_arguments_drive_a_real_member_call)
 {
     app::CppReflectServer server;
 
-    const auto full_doc = parse_json(R"({"query":"reflection in C++26","limit":5,
-                                         "exact_match":true,"unit":"Fahrenheit"})");
-    ASSERT_TRUE(full_doc.has_value());
-    const std::string full =
-        js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *full_doc);
-    EXPECT_NE(full.find("\"unit\":\"Fahrenheit\""), std::string::npos)
-        << "an explicit optional argument reaches the C++ call";
-
-    const auto omitted_doc = parse_json(R"({"query":"hello","limit":1,"exact_match":false})");
-    ASSERT_TRUE(omitted_doc.has_value());
-    const std::string omitted =
-        js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *omitted_doc);
-    EXPECT_EQ(omitted.find("\"unit\""), std::string::npos)
-        << "an omitted optional argument stays unset";
-}
-
-TEST(JsonSchema, an_out_of_range_enum_is_rejected)
-{
-    app::CppReflectServer server;
-    const auto doc = parse_json(R"({"query":"x","limit":1,"exact_match":true,"unit":"Kelvin"})");
+    const auto doc = parse_json(R"({"query":"reflection","limit":2,"exact_match":true})");
     ASSERT_TRUE(doc.has_value());
+    const auto text =
+        js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *doc);
 
-    EXPECT_THROW(
-        (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *doc),
-        std::exception);
+    // The call reached the real tool, so the payload echoes the arguments and the
+    // hits name files the corpus actually has.
+    const auto payload = parse_json(text);
+    ASSERT_TRUE(payload.has_value());
+    EXPECT_EQ(payload->at("query"), "reflection");
+    EXPECT_EQ(payload->at("limit"), 2);
+    EXPECT_TRUE(payload->at("exact_match").get<bool>());
+    ASSERT_FALSE(payload->at("hits").empty()) << "the corpus yields hits for 'reflection'";
+    for (const auto& hit : payload->at("hits")) {
+        EXPECT_TRUE(hit.contains("file") && hit.contains("line") && hit.contains("text"));
+    }
 }
 
 // A document arrives from a model, so every value must match the reflected type

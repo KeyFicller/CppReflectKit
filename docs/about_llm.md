@@ -9,39 +9,33 @@ Build prerequisites: [`../ReadMe.md`](../ReadMe.md).
 
 ```cpp
 // What you already have:
-std::string search_documents(std::string query, int limit, bool exact_match,
-                             std::optional<Unit> unit = std::nullopt);
+std::string search_documents(std::string query, int limit, bool exact_match);
 ```
 
 ```cpp
 // What you add — a marker and optional docs:
 [[= mcp::tool{}]]
-[[= js::doc{ .text = js::str("Searches the document index.") } ]]
+[[= js::doc{ .text = js::str("Searches the repository's own documentation.") } ]]
 [[= js::param_docs(js::str("The raw query text."), js::str("Maximum number of hits to return."),
-                   js::str("Require an exact match."), js::str("Optional unit filter.")) ]]
-std::string search_documents(std::string query, int limit, bool exact_match,
-                             std::optional<Unit> unit = std::nullopt);
+                   js::str("Require an exact (case-sensitive) match.")) ]]
+std::string search_documents(std::string query, int limit, bool exact_match);
 ```
 
 From those lines, at compile time:
 
 ```json
-{ "name": "search_documents", "description": "Searches the document index.",
+{ "name": "search_documents", "description": "Searches the repository's own documentation.",
   "inputSchema": {
     "type": "object",
     "properties": {
       "query":       { "type": "string",  "description": "The raw query text." },
       "limit":       { "type": "integer", "description": "Maximum number of hits to return." },
-      "exact_match": { "type": "boolean", "description": "Require an exact match." },
-      "unit":        { "anyOf": [ { "type": "string", "enum": ["Celsius", "Fahrenheit"] },
-                                  { "type": "null" } ],
-                       "description": "Optional unit filter." } },
+      "exact_match": { "type": "boolean", "description": "Require an exact (case-sensitive) match." } },
     "required": ["query", "limit", "exact_match"] } }
 ```
 
-Name, enum and `required` all come from the signature: `unit` is absent because
-`std::optional` (or a default argument) makes a parameter omittable. Change the C++
-and the schema follows.
+Name, enum and `required` all come from the signature: every parameter is required
+because none is `std::optional`. Change the C++ and the schema follows.
 
 ## How the derivation works
 

@@ -77,8 +77,8 @@ def test_emit_tools_is_openai_shaped():
     fn = tool_by_name(tools, "search_documents")
     params = fn["parameters"]
     assert params["type"] == "object"
-    assert set(params["properties"]) == {"query", "limit", "exact_match", "unit"}
-    # The reflected signature decides what is required: the defaulted `unit` is not.
+    assert set(params["properties"]) == {"query", "limit", "exact_match"}
+    # The reflected signature decides what is required; none of the three is optional.
     assert set(params["required"]) == {"query", "limit", "exact_match"}
 
 
@@ -92,6 +92,21 @@ def test_call_decodes_arguments_into_the_cpp_signature():
     assert out["limit"] == 2
     assert out["exact_match"] is True
     assert len(out["hits"]) == 2
+
+
+def test_search_documents_returns_real_corpus_hits():
+    """The tool reads the repository's own docs, so a hit is a real place."""
+    out = run_cli(
+        "--call",
+        "search_documents",
+        stdin={"query": "reflection", "limit": 5, "exact_match": True},
+    )
+    assert out["hits"], "the corpus yields hits for 'reflection'"
+    for hit in out["hits"]:
+        path = os.path.join(ROOT, hit["file"])
+        assert os.path.exists(path), f"hit names a file that exists: {hit['file']}"
+        assert "reflection" in hit["text"], "an exact-match hit contains the query"
+        assert hit["line"] >= 1
 
 
 def test_call_reports_bad_arguments_as_an_error():
@@ -179,7 +194,14 @@ def test_prompts_and_resources_are_exposed():
     prompts, resources = mcp(request("prompts/list", request_id=1), request("resources/list", request_id=2))
     assert [p["name"] for p in prompts["result"]["prompts"]] == ["explain"]
     uris = [r["uri"] for r in resources["result"]["resources"]]
-    assert "file:///docs/mcp_automation.md" in uris
+    assert "file:///docs/about_llm.md" in uris
+
+
+def test_resource_read_serves_the_named_file():
+    (response,) = mcp(request("resources/read", {"uri": "file:///docs/about_llm.md"}))
+    text = response["result"]["contents"][0]["text"]
+    with open(os.path.join(ROOT, "docs", "about_llm.md"), encoding="utf-8") as handle:
+        assert text == handle.read(), "the resource serves the file the URI names"
 
 
 def test_unknown_tool_is_invalid_params():
@@ -227,10 +249,10 @@ def test_parse_mcp_args_splits_prompt_arguments_from_the_question(llm_client):
 
 def test_parse_mcp_args_reads_a_resource(llm_client):
     prompt, args, resource, question = llm_client.parse_mcp_args(
-        ["--resource", "file:///docs/mcp_automation.md", "summarize"]
+        ["--resource", "file:///docs/about_llm.md", "summarize"]
     )
     assert (prompt, args, question) == (None, {}, "summarize")
-    assert resource == "file:///docs/mcp_automation.md"
+    assert resource == "file:///docs/about_llm.md"
 
 
 def test_request_timeout_honours_the_env_override(llm_client, monkeypatch):

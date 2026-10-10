@@ -379,6 +379,11 @@ if(CPPREF_BUILD_TESTS)
     test/llm/test_json_schema.cpp
     test/llm/test_mcp.cpp)
   target_link_libraries(CppReflection PRIVATE cppreflect::mcp GTest::gtest)
+  # The app's tools read the repository's own documentation; bake the source
+  # directory in so the corpus is found whatever the working directory, and let
+  # CPP_REFLECT_CORPUS override it at run time.
+  target_compile_definitions(CppReflection PRIVATE
+    CPPREF_CORPUS_ROOT="${CMAKE_SOURCE_DIR}")
 
   set(CPPREF_TEST_TARGETS basic_reflection undo_reflection ui_reflection CppReflection)
 

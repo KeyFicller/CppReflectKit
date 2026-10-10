@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <exception>
+#include <filesystem>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -83,30 +84,39 @@ TEST(Mcp, tools_list)
     ASSERT_EQ(tools.size(), 1u) << "exactly the marked function is registered";
     const json& tool = tools.at(0);
     check_eq(tool.at("name"), "search_documents", "name from identifier_of");
-    check_eq(tool.at("description"), "Searches the document index.", "description from js::doc");
+    check_eq(tool.at("description"), "Searches the repository's own documentation.",
+             "description from js::doc");
     const json& schema = tool.at("inputSchema");
     check_eq(schema.at("required"), json::array({"query", "limit", "exact_match"}),
              "required = the non-optional parameters");
     check_eq(schema.at("properties").at("query").at("description"), "The raw query text.",
              "parameter description from js::param_docs");
-    EXPECT_EQ(schema.at("properties").at("unit").at("anyOf").size(), 2u)
-        << "std::optional parameter -> anyOf[enum, null]";
+    EXPECT_EQ(schema.at("properties").size(), 3u) << "the signature's three parameters";
 }
 
 TEST(Mcp, tools_call)
 {
     const json result = result_of(request("tools/call",
                                           {{"name", "search_documents"},
-                                           {"arguments", {{"query", "mcp"},
+                                           {"arguments", {{"query", "reflection"},
                                                           {"limit", 2},
-                                                          {"exact_match", true},
-                                                          {"unit", "Fahrenheit"}}}})
+                                                          {"exact_match", true}}}})
                                      .dump());
     check_eq(result.at("isError"), false, "valid call is not an error");
     check_eq(result.at("content").at(0).at("type"), "text", "content is a text block");
-    EXPECT_NE(result.at("content").at(0).at("text").get<std::string>().find("mcp #1"),
-              std::string::npos)
-        << "the reflected call produced its payload";
+
+    // The tool reads the real corpus, so every hit names a file that exists and a
+    // line that really contains the query.
+    const json payload = json::parse(result.at("content").at(0).at("text").get<std::string>());
+    const json& hits = payload.at("hits");
+    ASSERT_EQ(hits.size(), 2u) << "the corpus has more than `limit` matches for 'reflection'";
+    for (const json& hit : hits) {
+        const std::filesystem::path path =
+            std::filesystem::path(CPPREF_CORPUS_ROOT) / hit.at("file").get<std::string>();
+        EXPECT_TRUE(std::filesystem::exists(path)) << "hit points at a real file: " << path;
+        EXPECT_NE(hit.at("text").get<std::string>().find("reflection"), std::string::npos)
+            << "an exact-match hit really contains the query";
+    }
 }
 
 TEST(Mcp, a_failing_tool_is_a_result_not_a_transport_error)
@@ -173,20 +183,21 @@ TEST(Mcp, resources)
     const json resources = result_of(request("resources/list").dump()).at("resources");
     ASSERT_EQ(resources.size(), 1u) << "exactly the marked function is registered";
     const json& resource = resources.at(0);
-    check_eq(resource.at("uri"), "file:///docs/mcp_automation.md", "uri read from the marker");
+    check_eq(resource.at("uri"), "file:///docs/about_llm.md", "uri read from the marker");
     check_eq(resource.at("mimeType"), "text/markdown", "mimeType read from the marker");
     check_eq(resource.at("name"), "design_notes", "name from identifier_of");
     check_eq(resource.at("description"), "Design notes for the reflection-driven MCP server.",
              "description from js::doc");
 
     const json result =
-        result_of(request("resources/read", {{"uri", "file:///docs/mcp_automation.md"}}).dump());
+        result_of(request("resources/read", {{"uri", "file:///docs/about_llm.md"}}).dump());
     const json& contents = result.at("contents");
     ASSERT_EQ(contents.size(), 1u) << "one content entry";
     check_eq(contents.at(0).at("mimeType"), "text/markdown", "content mimeType");
-    EXPECT_NE(contents.at(0).at("text").get<std::string>().find("Reflection-driven MCP"),
-              std::string::npos)
-        << "the resource body was invoked";
+    // The body serves the real file, so its own heading comes back verbatim.
+    const std::string text = contents.at(0).at("text").get<std::string>();
+    EXPECT_NE(text.find("Exposing existing C++ to an LLM"), std::string::npos)
+        << "the resource serves the file the URI names, not a copy";
 
     const json missing =
         drive({request("resources/read", {{"uri", "file:///nope"}}).dump()}).at(0);
@@ -224,8 +235,8 @@ TEST(Mcp, one_table_two_emitters)
     check_eq(openai.at(0).at("function").at("parameters"), listed.at(0).at("inputSchema"),
              "same inputSchema behind the OpenAI wrapper");
     EXPECT_NE(server.call_tool("search_documents",
-                               {{"query", "q"}, {"limit", 1}, {"exact_match", false}})
-                  .find("q #1"),
+                               {{"query", "reflection"}, {"limit", 1}, {"exact_match", true}})
+                  .find("\"query\":\"reflection\""),
               std::string::npos)
         << "call_tool mirrors the MCP call path";
 
