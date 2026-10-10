@@ -8,7 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include "scaffold/app_server.h"
-#include "reflection_json.h"
+#include "llm/reflection_json.h"
 
 // JSON Schema generated from C++26 static reflection, validated with a real JSON
 // parser (nlohmann/json). The schemas are consteval strings, but their content is

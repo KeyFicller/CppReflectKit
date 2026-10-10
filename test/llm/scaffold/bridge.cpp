@@ -16,7 +16,7 @@
 #include <nlohmann/json.hpp>
 
 #include "app_server.h"
-#include "reflection_json.h"
+#include "llm/reflection_json.h"
 
 // --serve() is a Unix socket server, so this translation unit is POSIX-only.
 #include <sys/socket.h>

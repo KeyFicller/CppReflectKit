@@ -8,7 +8,7 @@
 // test_json_schema.cpp so exactly one translation unit runs those static
 // initializers.
 
-#include "reflection_json.h"
+#include "llm/reflection_json.h"
 
 #include <array>
 #include <optional>

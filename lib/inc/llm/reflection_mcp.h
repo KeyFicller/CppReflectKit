@@ -5,9 +5,9 @@
 // the base constructor scans `Derived` by reflection -- no registration line, no
 // separate namespace. It owns the JSON-RPC 2.0 loop and the three tables.
 // Targets protocol revision 2026-07-28 (stateless; no initialize handshake). See
-// docs/reflection_bridge.md.
+// docs/about_llm.md.
 
-#include "reflection_json.h"
+#include "llm/reflection_json.h"
 
 #include <cstddef>
 #include <istream>

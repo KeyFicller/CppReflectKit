@@ -6,7 +6,7 @@
 // The domain types live in app_model.h.
 
 #include "app_model.h"
-#include "mcp.h"
+#include "llm/reflection_mcp.h"
 
 #include <optional>
 #include <string>

@@ -1,37 +1,58 @@
 #pragma once
 
-// Scaffolding for test_reflection_widgets.cpp: the demo data types and the reflection ->
-// ImGui widget mapping (MyUIControl plus the recursive impl_reflection_ui walk).
+// Scaffolding for test_reflection_widgets.cpp: the demo data types and one
+// override of a built-in widget. The reflection walk and the control matrix live
+// in lib/inc/ui/reflection_widgets.h; the library already knows int and double,
+// so here we only show how to replace one of its controls with an app-specific
+// widget -- a 0..100 slider instead of the default drag field.
+//
 // The app itself -- the window callback and the GLFW/OpenGL backend -- stays in
 // test_reflection_widgets.cpp and scaffold/imgui_backend_glfw_opengl3.cpp.
 
-#include <meta>
-#include <print>
-#include <format>
-#include <functional>
-#include <memory>
+#include "ui/reflection_widgets.h"
+
+#include <optional>
 #include <string>
-#include <imgui.h>
-#include <imgui_stdlib.h>
+#include <vector>
 
-struct MyBaseStruct {
-    std::string m_mem_tag;
+// A three-level hierarchy, so the walk has bases to recurse through first:
+//   Sensor is-a Calibration is-a Identity
+struct Identity {
+    std::string m_name;
 };
 
-struct MyStruct : public MyBaseStruct {
-    int m_mem_int;
-    double m_mem_real;
+struct Calibration : public Identity {
+    int m_channel;
+    double m_gain;
 };
 
-struct MyDeriveStruct : public MyStruct {
-    MyStruct m_mem_other;
+enum class Unit {
+    Celsius,
+    Fahrenheit
 };
 
-template <typename T>
-struct MyUIControl {};
+struct Sensor : public Calibration {
+    Calibration m_backup;                  // nested   -> a collapsing group
+    Unit m_unit = Unit::Celsius;           // enum     -> a combo
+    std::optional<int> m_offset;           // optional -> presence + slider
+    std::vector<int> m_samples;            // sequence -> sliders with add/remove
+    bool m_armed = false;                  // bool     -> a checkbox
+
+    // Per-field annotations override the type's default widget; the parameter
+    // names are ImGui::SliderInt / DragInt / InputInt's own. A label annotation
+    // replaces the reflected member name with human text.
+    [[= ui::label{ .text = ui::str("Input voltage") }]]
+    [[= ui::slider{.v_min = -10, .v_max = 10}]] int m_voltage = 0;
+    [[= ui::drag{.v_speed = 0.5f, .v_min = -100, .v_max = 100}]] int m_drift = 0;
+    [[= ui::label{ .text = ui::str("Retries") }]]
+    [[= ui::input{.step = 1, .step_fast = 10}]] int m_retries = 0;
+    [[= ui::checkbox{}]] bool m_enabled = false;
+};
+
+namespace ui {
 
 template <>
-struct MyUIControl<int> {
+struct Control<int> {
     void draw(int& value)
     {
         ImGui::PushID(static_cast<const void*>(&value));
@@ -42,7 +63,7 @@ struct MyUIControl<int> {
 };
 
 template <>
-struct MyUIControl<double> {
+struct Control<double> {
     void draw(double& value)
     {
         const double vmin = 0.0;
@@ -54,90 +75,4 @@ struct MyUIControl<double> {
     }
 };
 
-template <>
-struct MyUIControl<std::string> {
-    void draw(std::string& value)
-    {
-        ImGui::PushID(static_cast<const void*>(&value));
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        ImGui::InputText("##field", &value);
-        ImGui::PopID();
-    }
-};
-
-template <typename T>
-void impl_reflection_ui(T&);
-
-template <typename T>
-void impl_reflection_class_members(T& _object)
-{
-    if constexpr (std::meta::is_class_type(^^T)) {
-
-        constexpr auto bases =
-            std::define_static_array(std::meta::bases_of(^^T, std::meta::access_context::unchecked()));
-        template for (constexpr std::meta::info base : bases) {
-            constexpr std::meta::info bt = std::meta::dealias(std::meta::type_of(base));
-            if constexpr (std::meta::is_class_type(bt)) {
-                using base_type = typename[:bt:];
-                impl_reflection_ui(static_cast<base_type&>(_object));
-            }
-        }
-
-        constexpr auto fields =
-            std::define_static_array(std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked()));
-        template for (constexpr std::meta::info field : fields) {
-            constexpr std::meta::info fty = std::meta::dealias(std::meta::type_of(field));
-            const auto label_sv = std::meta::display_string_of(field);
-            const std::string label(label_sv.data(), label_sv.size());
-            const std::string member_label = std::string("* ") + label;
-
-            if constexpr (std::meta::is_class_type(fty) && !std::meta::is_same_type(fty, ^^std::string)) {
-                ImGui::PushID(static_cast<const void*>(std::addressof(_object.[:field:])));
-                if (ImGui::CollapsingHeader((member_label + ':').c_str(),
-                                            ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
-                    ImGui::Indent();
-                    impl_reflection_ui(_object.[:field:]);
-                    ImGui::Unindent();
-                }
-                ImGui::PopID();
-            } else {
-                ImGui::TextUnformatted(member_label.c_str());
-                ImGui::SameLine();
-
-                MyUIControl<typename[:fty:]>{}.draw(_object.[:field:]);
-            }
-        }
-    }
-}
-
-template <typename T>
-void impl_reflection_ui(T& _object)
-{
-    if constexpr (std::meta::is_same_type(^^std::remove_cvref_t<T>, ^^std::string)) {
-        ImGui::PushID(static_cast<const void*>(std::addressof(_object)));
-        ImGui::InputText("##string_value", &_object);
-        ImGui::PopID();
-        return;
-    }
-
-    if constexpr (std::meta::is_class_type(^^T)) {
-
-        ImGui::PushID(static_cast<const void*>(std::addressof(_object)));
-
-        const std::string identifier(std::meta::identifier_of(^^T));
-
-        // A CollapsingHeader like the one on the left of the ImGui demo:
-        // framed, full width, arrow plus label.
-        if (ImGui::CollapsingHeader((identifier + ':').c_str(),
-                                    ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth)) {
-            ImGui::Indent();
-            impl_reflection_class_members(_object);
-            ImGui::Unindent();
-        }
-
-        ImGui::PopID();
-    } else {
-        const std::string text = std::format("{}", _object);
-        ImGui::TextUnformatted(text.c_str());
-    }
-}
+} // namespace ui
