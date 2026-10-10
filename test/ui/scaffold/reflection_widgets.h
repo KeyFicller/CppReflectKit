@@ -17,13 +17,13 @@
 // A three-level hierarchy, so the walk has bases to recurse through first:
 //   Sensor is-a Calibration is-a Identity
 struct Identity {
-    std::string m_name;
-    char m_serial[32];                     // char array -> the buf/buf_size InputText
+    std::string m_name = "PT-100";
+    char m_serial[32] = "SN-A1024";        // char array -> the buf/buf_size InputText
 };
 
 struct Calibration : public Identity {
-    int m_channel;
-    double m_gain;
+    int m_channel = 3;
+    double m_gain = 1.5;
 };
 
 enum class Unit {
@@ -34,17 +34,17 @@ enum class Unit {
 struct Sensor : public Calibration {
     Calibration m_backup;                  // nested   -> a collapsing group
     Unit m_unit = Unit::Celsius;           // enum     -> a combo
-    std::optional<int> m_offset;           // optional -> presence + slider
-    std::vector<int> m_samples;            // sequence -> sliders with add/remove
-    bool m_armed = false;                  // bool     -> a checkbox
+    std::optional<int> m_offset = 12;      // optional -> presence + slider
+    std::vector<int> m_samples{ 1, 2, 3 }; // sequence -> sliders with add/remove
+    bool m_armed = true;                   // bool     -> a checkbox
 
     // Per-field annotations override the type's default widget. One annotation
     // names the ImGui function to call and carries its parameters by name. A
     // label annotation replaces the reflected member name with text.
     [[= ui::label{ .text = ui::str("Input voltage") }]]
-    [[= ui::control{ .fn = ^^ImGui::SliderInt, .v_min = -10.0, .v_max = 10.0 }]] int m_voltage = 0;
-    [[= ui::control{ .fn = ^^ImGui::DragInt, .v_speed = 0.5f, .v_min = -100.0, .v_max = 100.0 }]] int m_drift = 0;
+    [[= ui::control{ .fn = ^^ImGui::SliderInt, .v_min = -10.0, .v_max = 10.0 }]] int m_voltage = 5;
+    [[= ui::control{ .fn = ^^ImGui::DragInt, .v_speed = 0.5f, .v_min = -100.0, .v_max = 100.0 }]] int m_drift = 25;
     [[= ui::label{ .text = ui::str("Retries") }]]
-    [[= ui::control{ .fn = ^^ImGui::InputInt, .step = 1.0, .step_fast = 10.0 }]] int m_retries = 0;
-    [[= ui::control{ .fn = ^^ImGui::Checkbox }]] bool m_enabled = false;
+    [[= ui::control{ .fn = ^^ImGui::InputInt, .step = 1.0, .step_fast = 10.0 }]] int m_retries = 3;
+    [[= ui::control{ .fn = ^^ImGui::Checkbox }]] bool m_enabled = true;
 };
