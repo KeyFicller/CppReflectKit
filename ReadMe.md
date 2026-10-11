@@ -319,6 +319,7 @@ cmake -DCPPREF_WITH_UI=OFF -DCPPREF_WITH_LLM=OFF ...   # then only cppreflect::u
 - [`docs/about_undo.md`](docs/about_undo.md) — the member/index codec, commands and transactions.
 - [`docs/about_ui.md`](docs/about_ui.md) — the widget walk, control annotations and overrides.
 - [`docs/about_llm.md`](docs/about_llm.md) — JSON schema, MCP tools/prompts/resources, and the LLM bridge.
+- [`docs/about_dispatch.md`](docs/about_dispatch.md) — calling a function by parameter name, for tool calls and widget controls alike.
 
 ## License
 
