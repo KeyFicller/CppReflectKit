@@ -90,7 +90,7 @@ if(CPPREF_IS_TOP_LEVEL)
   set(CMAKE_C_COMPILER "${CPPREF_LLVM_ROOT}/bin/clang" CACHE FILEPATH "" FORCE)
 endif()
 
-project(CppReflection LANGUAGES C CXX)
+project(CppReflectKit LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -371,21 +371,21 @@ if(CPPREF_BUILD_TESTS)
   # --- llm/ : the app under test, plus its tests. -------------------------
   # scaffold/ holds the example application (model, server, transport, entries,
   # Python client); the two .cpp files beside it are the tests. The name stays
-  # CppReflection because llm_client.py spawns build/CppReflection.
-  add_executable(CppReflection
+  # CppReflectKit because llm_client.py spawns build/CppReflectKit.
+  add_executable(CppReflectKit
     test/llm/scaffold/main.cpp
     test/llm/scaffold/mcp_server.cpp
     test/llm/scaffold/bridge.cpp
     test/llm/test_json_schema.cpp
     test/llm/test_mcp.cpp)
-  target_link_libraries(CppReflection PRIVATE cppreflect::mcp GTest::gtest)
+  target_link_libraries(CppReflectKit PRIVATE cppreflect::mcp GTest::gtest)
   # The app's tools read the repository's own documentation; bake the source
   # directory in so the corpus is found whatever the working directory, and let
   # CPP_REFLECT_CORPUS override it at run time.
-  target_compile_definitions(CppReflection PRIVATE
+  target_compile_definitions(CppReflectKit PRIVATE
     CPPREF_CORPUS_ROOT="${CMAKE_SOURCE_DIR}")
 
-  set(CPPREF_TEST_TARGETS basic_reflection undo_reflection ui_reflection CppReflection)
+  set(CPPREF_TEST_TARGETS basic_reflection undo_reflection ui_reflection CppReflectKit)
 
   # Diagnostics for this project's own targets only; third-party code is left alone.
   foreach(_target IN LISTS CPPREF_TEST_TARGETS)
@@ -417,7 +417,7 @@ if(CPPREF_BUILD_TESTS)
 
   gtest_discover_tests(basic_reflection DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(undo_reflection DISCOVERY_MODE PRE_TEST)
-  gtest_discover_tests(CppReflection DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(CppReflectKit DISCOVERY_MODE PRE_TEST)
 
   add_test(NAME ui COMMAND ui_reflection)
   set_tests_properties(ui PROPERTIES DISABLED TRUE LABELS manual)

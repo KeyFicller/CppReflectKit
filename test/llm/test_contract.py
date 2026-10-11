@@ -21,7 +21,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))          # test/llm
 ROOT = os.path.dirname(os.path.dirname(HERE))               # repository root
 SCAFFOLD = os.path.join(HERE, "scaffold")                   # the app under test
-BINARY = os.path.join(ROOT, "build", "CppReflection")
+BINARY = os.path.join(ROOT, "build", "CppReflectKit")
 
 PROTOCOL_VERSION = "2026-07-28"
 

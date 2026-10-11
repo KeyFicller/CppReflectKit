@@ -59,7 +59,7 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
     cppref_configure_glfw_opengl();
 
     GLFWwindow* window =
-        glfwCreateWindow(1280, 720, "CppReflection — ImGui docking (GLFW + OpenGL 3)", nullptr, nullptr);
+        glfwCreateWindow(1280, 720, "CppReflectKit — ImGui docking (GLFW + OpenGL 3)", nullptr, nullptr);
     if (!window) {
         glfwTerminate();
         std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -103,7 +103,7 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
             ImGui::ShowDemoWindow(&show_demo_window);
         }
 
-        ImGui::Begin("CppReflection");
+        ImGui::Begin("CppReflectKit");
         ImGui::TextUnformatted("Backend: GLFW + OpenGL 3 (Dear ImGui docking branch). Drag tab bar to dock windows.");
         ImGui::Checkbox("ImGui Demo", &show_demo_window);
         ImGui::End();

@@ -312,7 +312,7 @@ this project's tests. A slimmer import turns the optional halves off:
 cmake -DCPPREF_WITH_UI=OFF -DCPPREF_WITH_LLM=OFF ...   # then only cppreflect::undo exists
 ```
 
-`add_subdirectory(path/to/CppReflection)` works the same way.
+`add_subdirectory(path/to/CppReflectKit)` works the same way.
 
 ## Design notes
 

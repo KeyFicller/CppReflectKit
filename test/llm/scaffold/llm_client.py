@@ -30,7 +30,7 @@ Endpoint quirks this works around:
   * the server is not bound by "strict" even then, so conformance is proven on
     the C++ side, where parsing fails loudly on a bad enum or type.
 
-Joint debugging: set CPP_REFLECT_SOCKET to a running `CppReflection --serve`
+Joint debugging: set CPP_REFLECT_SOCKET to a running `CppReflectKit --serve`
 socket and run_cpp() talks to it instead of spawning a process, so a debugger
 holding that process keeps its breakpoints across a whole LLM loop.
 """
@@ -50,7 +50,7 @@ from langchain_deepseek import ChatDeepSeek
 # This file lives in test/llm/scaffold/; both the binary it drives and the .env
 # it reads sit at the repository root.
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-BINARY = os.path.join(ROOT, "build", "CppReflection")
+BINARY = os.path.join(ROOT, "build", "CppReflectKit")
 MODEL = "deepseek-flash"
 
 # One C++ request must not hang forever. Override with CPP_REFLECT_TIMEOUT
