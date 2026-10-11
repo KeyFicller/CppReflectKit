@@ -1,4 +1,4 @@
-# C++26 static reflection
+# CppReflectKit
 
 Header-only libraries for WG21 [P2996](https://wg21.link/p2996) (`std::meta`),
 built with the experimental
