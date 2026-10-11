@@ -1,0 +1,72 @@
+# Every translation unit here needs Bloomberg's clang-p2996 fork, which no
+# runner image ships and which takes 30-90 minutes to build. The job instead
+# pulls a prebuilt toolchain image that carries it at /opt/clang-p2996.
+#
+# The image tag names the fork commit it was built from, so it is immutable.
+# Bumping it is what keeps CI matching the toolchain you build against locally:
+# when fresh reflection syntax compiles for you but dies here, the pin is old.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: ghcr.io/shoom1/clang-p2996:p2996-9ffb96e3ce36
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain image ships clang, cmake, ninja and git, but nothing the
+      # GLFW/OpenGL layer or the Python tests need. pkg-config is not optional:
+      # without it glfw's own configure step fails to find X11/Wayland.
+      - name: Install build and test dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            pkg-config python3-pip \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libwayland-dev libwayland-bin wayland-protocols libxkbcommon-dev
+
+      # The image's cmake is 3.28, which does not know the cxx_std_26 compile
+      # feature that cppreflect::common requests, so configure dies with
+      # "compiler feature cxx_std_26 is not known". A current cmake installs
+      # over it at /usr/local/bin without the project changing its own logic.
+      - name: Install a cmake that knows cxx_std_26
+        run: |
+          python3 -m pip install --break-system-packages "cmake>=4.4,<5"
+          cmake --version
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCPPREF_LLVM_ROOT=/opt/clang-p2996
+          -DCPPREF_DEPS_FROM_GITHUB=ON
+
+      - name: Build
+        run: cmake --build build
+
+      # Builds the ui_reflection executable too, so the reflection widget layer
+      # is compile-checked even though its one test is registered DISABLED
+      # (it opens a window).
+      - name: C++ tests
+        run: ctest --test-dir build --output-on-failure
+
+      # requirements.txt pulls the langchain/fastmcp stack that the scaffold
+      # client imports; without it pytest.importorskip quietly drops 4 tests.
+      - name: Python contract tests
+        run: |
+          python3 -m pip install --break-system-packages -r requirements.txt
+          python3 -m pytest test -q
