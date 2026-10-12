@@ -9,7 +9,8 @@
 // A field may also carry a widget annotation -- [[= ui::control{.fn = ^^ImGui::SliderInt, .v_min = 0, .v_max = 50}]]
 // -- to override its control per field. The annotation names the ImGui function
 // to call and carries that function's parameters as named members, checked by
-// reflection below. See docs/about_ui.md.
+// reflection below. [[= ui::hidden{}]] leaves a field out of the form. See
+// docs/about_ui.md.
 
 #include <array>
 #include <cstddef>
@@ -164,6 +165,10 @@ template <std::size_t N = 1>
 struct label {
     str<N> text;
 };
+
+/// A field left out of the form entirely:
+///   [[= ui::hidden{}]] int m_internal;
+struct hidden {};
 
 /// The text of a `label` annotation on `E`, or "" when there is none.
 template <std::meta::info E>
@@ -451,6 +456,13 @@ consteval bool is_widget_annotated()
     return has_annotation<^^control, Field>();
 }
 
+/// Whether the field is marked [[= ui::hidden{}]] and must not be drawn.
+template <std::meta::info Field>
+consteval bool is_hidden()
+{
+    return has_annotation<^^hidden, Field>();
+}
+
 // --- the enum combo ---------------------------------------------------------
 // An enum is spliced from the reflected enumerators, so the combo always lists
 // the real set: no hand-written table to drift from the declaration.
@@ -647,6 +659,9 @@ void draw_members(T& _object)
             std::define_static_array(std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked()));
         template for (constexpr std::meta::info field : fields) {
             constexpr std::meta::info fty = std::meta::dealias(std::meta::type_of(field));
+            if constexpr (is_hidden<field>()) {
+                continue;   // [[= ui::hidden{}]]: this field is not drawn
+            }
             // field_label runs the annotation lookup in a constant context; a
             // reflection query in a runtime expression is not reliable.
             const std::string member_label = field_label<field>();

@@ -20,6 +20,15 @@ static_assert(ui::has_annotation<^^ui::control, ^^Sensor::m_enabled>(), "checkbo
 static_assert(!ui::has_annotation<^^ui::control, ^^Calibration::m_channel>(),
               "an unannotated field must not report a control annotation");
 
+// A hidden field is read as such and carries no control, so the walk skips it
+// while a normal field is still drawn.
+static_assert(ui::has_annotation<^^ui::hidden, ^^Sensor::m_internal>(),
+              "hidden annotation not read");
+static_assert(ui::is_hidden<^^Sensor::m_internal>(), "hidden field must report hidden");
+static_assert(!ui::is_hidden<^^Sensor::m_armed>(), "an unannotated field is not hidden");
+static_assert(!ui::has_annotation<^^ui::control, ^^Sensor::m_internal>(),
+              "a hidden field carries no control annotation");
+
 // The control's vocabulary is checked against the functions it can drive: every
 // member names a parameter of one of them, and a use site must name one.
 static_assert(ui::control_members_are_parameters(), "every ui::control member names a parameter");

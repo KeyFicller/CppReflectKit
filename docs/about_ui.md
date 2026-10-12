@@ -29,6 +29,7 @@ struct MyForm : MyStruct {
     [[= ui::control{.fn = ^^ImGui::DragInt, .v_speed = 0.5f, .v_min = -100, .v_max = 100}]]
         int m_mem_drag;
     [[= ui::control{.fn = ^^ImGui::Checkbox}]] bool m_mem_check;
+    [[= ui::hidden{}]] int m_mem_internal;   // in the struct, not in the form
 };
 
 ui::draw(form);   // labelled sliders, checks, enum combos, lists and nested groups,
@@ -37,7 +38,9 @@ ui::draw(form);   // labelled sliders, checks, enum combos, lists and nested gro
 
 A `label` annotation is the natural one: without it the reflected member name is shown
 (`m_volts`); with it, that text replaces the name. The control annotations are
-orthogonal — a field can carry both.
+orthogonal — a field can carry both. A `hidden` annotation drops the field from the form
+altogether: it stays in the struct and is simply not drawn, which is how state the UI must
+not edit stays out of it.
 
 An annotation is **per field**. To change a widget for a whole *type*, there are two
 routes. For a type the control vocabulary already covers, specialize `default_control<T>`
@@ -237,6 +240,7 @@ control, or `Control<T>` when the app specialized one:
 | a class with no `Control<T>` | a `CollapsingHeader`, recursed into |
 | a base class | its members, inlined in the derived object |
 | a field with a **control annotation** | that control, driven by the annotation's parameters |
+| a field with a **`hidden` annotation** | nothing — the row is skipped |
 | a type with a **`Control<T>`** | that control, as a leaf rather than a nested group |
 | anything else | a `static_assert` at the point of use |
 

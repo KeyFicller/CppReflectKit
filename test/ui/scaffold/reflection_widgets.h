@@ -47,4 +47,8 @@ struct Sensor : public Calibration {
     [[= ui::label{ .text = ui::str("Retries") }]]
     [[= ui::control{ .fn = ^^ImGui::InputInt, .step = 1.0, .step_fast = 10.0 }]] int m_retries = 3;
     [[= ui::control{ .fn = ^^ImGui::Checkbox }]] bool m_enabled = true;
+
+    // A hidden field is skipped by the walk: kept in the struct, absent from the
+    // form. Useful for state the UI must not edit.
+    [[= ui::hidden{}]] int m_internal = 0;
 };
