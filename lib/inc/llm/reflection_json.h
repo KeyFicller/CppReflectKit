@@ -1,9 +1,9 @@
 #pragma once
 
 // The reflection-driven JSON layer: schema generation (struct/function -> JSON
-// Schema), the annotation types (doc / desc / param_docs), and the reverse decoder
-// (JSON -> C++). Lifted verbatim out of test_json_schema.cpp so the MCP server
-// (mcp.h) can reuse it without a translation-unit dependency.
+// Schema), the annotation types (doc / desc / param_docs), and the reverse
+// decoder (JSON -> C++). Lifted verbatim out of test_json_schema.cpp so the MCP
+// server (mcp.h) can reuse it without a translation-unit dependency.
 
 #include <array>
 #include <charconv>
@@ -29,43 +29,37 @@ namespace js {
 // --- annotation value types -------------------------------------------------
 // An annotation value must be structural, so a string cannot be a string_view.
 // str<N> holds exactly N characters, including the NUL, e.g. str<6>{"hello"}.
-template <std::size_t N>
-struct str {
+template <std::size_t N> struct str {
     char data[N]{};
     constexpr str() = default;
-    constexpr str(const char (&s)[N])
-    {
+    constexpr str(const char (&s)[N]) {
         for (std::size_t i = 0; i < N; ++i) {
             data[i] = s[i];
         }
     }
 };
-template <std::size_t N>
-str(const char (&)[N]) -> str<N>;
+template <std::size_t N> str(const char (&)[N]) -> str<N>;
 
-// Function-level documentation, applied as [[= js::doc{ .text = js::str("...") } ]].
-template <std::size_t N = 1>
-struct doc {
+// Function-level documentation, applied as [[= js::doc{ .text = js::str("...")
+// } ]].
+template <std::size_t N = 1> struct doc {
     str<N> text;
 };
 
-// Field-level description for a struct member, applied directly on the member as
+// Field-level description for a struct member, applied directly on the member
+// as
 // [[= js::desc{ .text = js::str("...") } ]]. The same type is reused for the
 // positional parameter list below.
-template <std::size_t N = 1>
-struct desc {
+template <std::size_t N = 1> struct desc {
     str<N> text;
 };
 
 // A structural, variadic list of descriptions. std::tuple is not a structural
 // type in this implementation, so we roll our own. A constructor keeps the
 // nested aggregate from tripping -Wmissing-braces/-Wmissing-field-initializers.
-template <typename... Ts>
-struct doc_list;
-template <>
-struct doc_list<> {};
-template <typename T, typename... Ts>
-struct doc_list<T, Ts...> {
+template <typename... Ts> struct doc_list;
+template <> struct doc_list<> {};
+template <typename T, typename... Ts> struct doc_list<T, Ts...> {
     T head;
     doc_list<Ts...> tail;
 
@@ -75,22 +69,19 @@ struct doc_list<T, Ts...> {
 
 /// Function-parameter descriptions, matched to parameters by position:
 ///   [[= js::param_docs(js::str("first"), js::str("second")) ]]
-/// (An annotation on the parameter itself is not readable: annotations_of() on a
-/// parameter reflection fails, so the metadata lives on the function instead.)
-consteval auto param_docs(auto... _xs)
-{
+/// (An annotation on the parameter itself is not readable: annotations_of() on
+/// a parameter reflection fails, so the metadata lives on the function
+/// instead.)
+consteval auto param_docs(auto... _xs) {
     return doc_list<decltype(_xs)...>{_xs...};
 }
 
 // --- type traits ------------------------------------------------------------
 
-template <typename T>
-struct is_optional : std::false_type {};
-template <typename T>
-struct is_optional<std::optional<T>> : std::true_type {};
+template <typename T> struct is_optional : std::false_type {};
+template <typename T> struct is_optional<std::optional<T>> : std::true_type {};
 
-template <typename T>
-struct is_sequence : std::false_type {};
+template <typename T> struct is_sequence : std::false_type {};
 template <typename T, typename A>
 struct is_sequence<std::vector<T, A>> : std::true_type {
     using value_type = T;
@@ -108,8 +99,9 @@ inline constexpr bool is_string_like_v =
     std::is_same_v<std::remove_cv_t<T>, std::string> ||
     std::is_same_v<std::remove_cv_t<T>, std::string_view>;
 
-/// The scalar types json_type_name() can name: everything param_schema() does not
-/// route to optional/sequence/enum/nested-object. Anything else is unsupported.
+/// The scalar types json_type_name() can name: everything param_schema() does
+/// not route to optional/sequence/enum/nested-object. Anything else is
+/// unsupported.
 template <typename T>
 inline constexpr bool is_json_scalar_v =
     std::is_same_v<std::remove_cv_t<T>, bool> || std::is_integral_v<T> ||
@@ -117,20 +109,33 @@ inline constexpr bool is_json_scalar_v =
 
 // --- JSON helpers -----------------------------------------------------------
 
-constexpr std::string json_escape(std::string_view _s)
-{
+constexpr std::string json_escape(std::string_view _s) {
     constexpr char kHex[] = "0123456789abcdef";
     std::string out;
     for (char c : _s) {
         const auto u = static_cast<unsigned char>(c);
         switch (c) {
-        case '"': out += "\\\""; break;
-        case '\\': out += "\\\\"; break;
-        case '\n': out += "\\n"; break;
-        case '\r': out += "\\r"; break;
-        case '\t': out += "\\t"; break;
-        case '\b': out += "\\b"; break;
-        case '\f': out += "\\f"; break;
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        case '\r':
+            out += "\\r";
+            break;
+        case '\t':
+            out += "\\t";
+            break;
+        case '\b':
+            out += "\\b";
+            break;
+        case '\f':
+            out += "\\f";
+            break;
         default:
             // Every other control character must be escaped as \u00XX, or the
             // output is not valid JSON.
@@ -149,8 +154,7 @@ constexpr std::string json_escape(std::string_view _s)
 
 /// Decimal text for a non-negative integer, usable at consteval (std::to_string
 /// is not constexpr here).
-consteval std::string decimal(std::size_t _v)
-{
+consteval std::string decimal(std::size_t _v) {
     if (_v == 0) {
         return "0";
     }
@@ -168,8 +172,7 @@ consteval std::string decimal(std::size_t _v)
 }
 
 /// JSON type keyword for a reflected type.
-consteval const char* json_type_name(meta::info _t)
-{
+consteval const char *json_type_name(meta::info _t) {
     _t = meta::dealias(_t);
     // bool must be tested before is_integral_type, which is also true for bool.
     if (meta::is_same_type(_t, ^^bool)) {
@@ -181,7 +184,8 @@ consteval const char* json_type_name(meta::info _t)
     if (meta::is_floating_point_type(_t)) {
         return "number";
     }
-    if (meta::is_same_type(_t, ^^std::string) || meta::is_same_type(_t, ^^std::string_view)) {
+    if (meta::is_same_type(_t, ^^std::string) ||
+        meta::is_same_type(_t, ^^std::string_view)) {
         return "string";
     }
     // Unreachable: param_schema() only calls this for types satisfying
@@ -191,11 +195,9 @@ consteval const char* json_type_name(meta::info _t)
 
 // --- description annotations ------------------------------------------------
 
-/// First annotation on `_e` whose type is an instantiation of the template `Tmpl`,
-/// or an empty reflection when there is none.
-template <meta::info Tmpl>
-consteval meta::info find_annotation(meta::info _e)
-{
+/// First annotation on `_e` whose type is an instantiation of the template
+/// `Tmpl`, or an empty reflection when there is none.
+template <meta::info Tmpl> consteval meta::info find_annotation(meta::info _e) {
     for (meta::info a : meta::annotations_of(_e)) {
         const meta::info t = meta::remove_const(meta::type_of(a));
         if (meta::has_template_arguments(t) && meta::template_of(t) == Tmpl) {
@@ -206,31 +208,27 @@ consteval meta::info find_annotation(meta::info _e)
 }
 
 /// Text held by the first `Tmpl` annotation on `E`, or "" when there is none.
-template <meta::info Tmpl, meta::info E>
-consteval std::string text_of()
-{
+template <meta::info Tmpl, meta::info E> consteval std::string text_of() {
     if constexpr (find_annotation<Tmpl>(E) == meta::info{}) {
         return {};
     } else {
         constexpr auto cfg =
-            meta::extract<typename [: meta::type_of(find_annotation<Tmpl>(E)) :]>(find_annotation<Tmpl>(E));
+            meta::extract<typename[:meta::type_of(find_annotation<Tmpl>(E)):]>(
+                find_annotation<Tmpl>(E));
         return std::string(std::string_view(cfg.text.data));
     }
 }
 
-template <meta::info Fn>
-consteval std::size_t param_doc_count()
-{
+template <meta::info Fn> consteval std::size_t param_doc_count() {
     if (find_annotation<^^doc_list>(Fn) == meta::info{}) {
         return 0;
     }
-    return meta::template_arguments_of(meta::remove_const(meta::type_of(find_annotation<^^doc_list>(Fn))))
+    return meta::template_arguments_of(meta::remove_const(meta::type_of(
+                                           find_annotation<^^doc_list>(Fn))))
         .size();
 }
 
-template <std::size_t I, typename List>
-consteval auto nth_doc(List _list)
-{
+template <std::size_t I, typename List> consteval auto nth_doc(List _list) {
     if constexpr (I == 0) {
         return _list.head;
     } else {
@@ -240,44 +238,44 @@ consteval auto nth_doc(List _list)
 
 /// Positional description for parameter `I` of `Fn`, or "" if undocumented.
 template <meta::info Fn, std::size_t I>
-consteval std::string param_description()
-{
+consteval std::string param_description() {
     if constexpr (find_annotation<^^doc_list>(Fn) == meta::info{}) {
         return {};
     } else if constexpr (I < param_doc_count<Fn>()) {
-        constexpr auto list =
-            meta::extract<typename [: meta::type_of(find_annotation<^^doc_list>(Fn)) :]>(
-                find_annotation<^^doc_list>(Fn));
+        constexpr auto list = meta::extract<
+            typename[:meta::type_of(find_annotation<^^doc_list>(Fn)):]>(
+            find_annotation<^^doc_list>(Fn));
         return std::string(std::string_view(nth_doc<I>(list).data));
     } else {
         return {};
     }
 }
 
-/// Splice a description into a generated schema, which is always one JSON object.
-consteval std::string with_description(std::string _schema, std::string_view _desc)
-{
+/// Splice a description into a generated schema, which is always one JSON
+/// object.
+consteval std::string with_description(std::string _schema,
+                                       std::string_view _desc) {
     if (_desc.empty()) {
         return _schema;
     }
-    return _schema.substr(0, _schema.size() - 1) + ",\"description\":\"" + json_escape(_desc) + "\"}";
+    return _schema.substr(0, _schema.size() - 1) + ",\"description\":\"" +
+           json_escape(_desc) + "\"}";
 }
 
 // --- schema generation ------------------------------------------------------
 
-template <typename T>
-consteval std::string param_schema();
+template <typename T> consteval std::string param_schema();
 
-template <typename T>
-consteval std::size_t member_count()
-{
-    return meta::nonstatic_data_members_of(^^T, meta::access_context::unchecked()).size();
+template <typename T> consteval std::size_t member_count() {
+    return meta::nonstatic_data_members_of(^^T,
+                                           meta::access_context::unchecked())
+        .size();
 }
 
 template <typename T>
-consteval std::array<meta::info, member_count<T>()> member_infos()
-{
-    const auto members = meta::nonstatic_data_members_of(^^T, meta::access_context::unchecked());
+consteval std::array<meta::info, member_count<T>()> member_infos() {
+    const auto members =
+        meta::nonstatic_data_members_of(^^T, meta::access_context::unchecked());
     std::array<meta::info, member_count<T>()> out{};
     for (std::size_t i = 0; i < members.size(); ++i) {
         out[i] = members[i];
@@ -286,42 +284,45 @@ consteval std::array<meta::info, member_count<T>()> member_infos()
 }
 
 template <typename T, std::size_t... Is>
-consteval std::string object_schema_impl(std::index_sequence<Is...>)
-{
+consteval std::string object_schema_impl(std::index_sequence<Is...>) {
     constexpr auto infos = member_infos<T>();
     std::string properties;
     std::string required;
     ((void)([&] {
-        using MT = std::remove_cvref_t<typename [: meta::type_of(infos[Is]) :]>;
-        const std::string name(meta::identifier_of(infos[Is]));
-        if (!properties.empty()) {
-            properties += ",";
-        }
-        properties += "\"" + name + "\":" +
-                      with_description(param_schema<MT>(), text_of<^^js::desc, infos[Is]>());
-        if constexpr (!is_optional<MT>::value && !meta::has_default_member_initializer(infos[Is])) {
-            if (!required.empty()) {
-                required += ",";
-            }
-            required += "\"" + name + "\"";
-        }
-    }()), ...);
-    return "{\"type\":\"object\",\"properties\":{" + properties + "},\"required\":[" + required + "]}";
+         using MT = std::remove_cvref_t<typename[:meta::type_of(infos[Is]):]>;
+         const std::string name(meta::identifier_of(infos[Is]));
+         if (!properties.empty()) {
+             properties += ",";
+         }
+         properties += "\"" + name + "\":" +
+                       with_description(param_schema<MT>(),
+                                        text_of<^^js::desc, infos[Is]>());
+         if constexpr (!is_optional<MT>::value &&
+                       !meta::has_default_member_initializer(infos[Is])) {
+             if (!required.empty()) {
+                 required += ",";
+             }
+             required += "\"" + name + "\"";
+         }
+     }()),
+     ...);
+    return "{\"type\":\"object\",\"properties\":{" + properties +
+           "},\"required\":[" + required + "]}";
 }
 
 /// JSON Schema for one C++ type. std::optional becomes anyOf[T, null] (matching
 /// Pydantic's Optional), vectors/arrays become arrays, enums become string
 /// enums, and other classes become nested objects.
-template <typename T>
-consteval std::string param_schema()
-{
+template <typename T> consteval std::string param_schema() {
     if constexpr (is_optional<T>::value) {
-        return "{\"anyOf\":[" + param_schema<typename T::value_type>() + ",{\"type\":\"null\"}]}";
+        return "{\"anyOf\":[" + param_schema<typename T::value_type>() +
+               ",{\"type\":\"null\"}]}";
     } else if constexpr (is_sequence<T>::value) {
-        std::string out =
-            "{\"type\":\"array\",\"items\":" + param_schema<typename T::value_type>();
+        std::string out = "{\"type\":\"array\",\"items\":" +
+                          param_schema<typename T::value_type>();
         if constexpr (is_sequence<T>::fixed_size) {
-            // std::array has a fixed length: pin it so the model knows the size.
+            // std::array has a fixed length: pin it so the model knows the
+            // size.
             const std::string n = decimal(is_sequence<T>::extent);
             out += ",\"minItems\":" + n + ",\"maxItems\":" + n;
         }
@@ -337,12 +338,14 @@ consteval std::string param_schema()
         }
         return "{\"type\":\"string\",\"enum\":[" + values + "]}";
     } else if constexpr (std::is_class_v<T> && !is_string_like_v<T>) {
-        return object_schema_impl<T>(std::make_index_sequence<member_count<T>()>());
+        return object_schema_impl<T>(
+            std::make_index_sequence<member_count<T>()>());
     } else {
-        static_assert(is_json_scalar_v<T>,
-                      "param_schema: unsupported type for JSON Schema generation "
-                      "(only bool, integers, floats, strings, options, sequences, enums "
-                      "and reflected classes are supported)");
+        static_assert(
+            is_json_scalar_v<T>,
+            "param_schema: unsupported type for JSON Schema generation "
+            "(only bool, integers, floats, strings, options, sequences, enums "
+            "and reflected classes are supported)");
         return std::string("{\"type\":\"") + json_type_name(^^T) + "\"}";
     }
 }
@@ -351,77 +354,75 @@ consteval std::string param_schema()
 // Anything touching meta::info happens at consteval; the results handed to the
 // runtime string assembly are plain values.
 
-template <meta::info Fn>
-consteval std::size_t param_count()
-{
+template <meta::info Fn> consteval std::size_t param_count() {
     return meta::parameters_of(Fn).size();
 }
 
-template <meta::info Fn, std::size_t I>
-consteval meta::info param_at()
-{
+template <meta::info Fn, std::size_t I> consteval meta::info param_at() {
     return meta::parameters_of(Fn)[I];
 }
 
 template <meta::info Fn, std::size_t I>
-using param_type_at = std::remove_cvref_t<typename [: meta::type_of(param_at<Fn, I>()) :]>;
+using param_type_at =
+    std::remove_cvref_t<typename[:meta::type_of(param_at<Fn, I>()):]>;
 
 template <meta::info Fn, std::size_t... Is>
-consteval std::string param_object_schema_impl(std::index_sequence<Is...>)
-{
+consteval std::string param_object_schema_impl(std::index_sequence<Is...>) {
     std::string properties;
     std::string required;
     ((void)([&] {
-        using PT = param_type_at<Fn, Is>;
-        const std::string name(meta::identifier_of(param_at<Fn, Is>()));
-        if (!properties.empty()) {
-            properties += ",";
-        }
-        properties += "\"" + name + "\":" +
-                      with_description(param_schema<PT>(), param_description<Fn, Is>());
-        // A default argument does not make a parameter omittable: its value cannot
-        // be recovered at dispatch time, so the model must supply it.
-        if constexpr (!is_optional<PT>::value) {
-            if (!required.empty()) {
-                required += ",";
-            }
-            required += "\"" + name + "\"";
-        }
-    }()), ...);
-    return "{\"type\":\"object\",\"properties\":{" + properties + "},\"required\":[" + required + "]}";
+         using PT = param_type_at<Fn, Is>;
+         const std::string name(meta::identifier_of(param_at<Fn, Is>()));
+         if (!properties.empty()) {
+             properties += ",";
+         }
+         properties +=
+             "\"" + name + "\":" +
+             with_description(param_schema<PT>(), param_description<Fn, Is>());
+         // A default argument does not make a parameter omittable: its value
+         // cannot be recovered at dispatch time, so the model must supply it.
+         if constexpr (!is_optional<PT>::value) {
+             if (!required.empty()) {
+                 required += ",";
+             }
+             required += "\"" + name + "\"";
+         }
+     }()),
+     ...);
+    return "{\"type\":\"object\",\"properties\":{" + properties +
+           "},\"required\":[" + required + "]}";
 }
 
-template <meta::info Fn>
-consteval std::string param_object_schema()
-{
-    return param_object_schema_impl<Fn>(std::make_index_sequence<param_count<Fn>()>());
+template <meta::info Fn> consteval std::string param_object_schema() {
+    return param_object_schema_impl<Fn>(
+        std::make_index_sequence<param_count<Fn>()>());
 }
 
 // --- documentation annotation ----------------------------------------------
 
 /// Function-level description from [[= js::doc{ ... } ]].
-template <meta::info Fn>
-consteval std::string description_of()
-{
+template <meta::info Fn> consteval std::string description_of() {
     return text_of<^^js::doc, Fn>();
 }
 
 // --- public entry points ----------------------------------------------------
 
 enum class Style {
-    JsonSchema,  ///< the raw JSON Schema of the parameters/fields
-    OpenAiTool,  ///< {"type":"function","function":{name, description, parameters}}
+    JsonSchema, ///< the raw JSON Schema of the parameters/fields
+    OpenAiTool, ///< {"type":"function","function":{name, description,
+                ///< parameters}}
 };
 
-/// Builds the OpenAI tool wrapper as plain text. constexpr (not consteval) so the
-/// same code serves both the compile-time schema path and a runtime emitter
+/// Builds the OpenAI tool wrapper as plain text. constexpr (not consteval) so
+/// the same code serves both the compile-time schema path and a runtime emitter
 /// (--emit-tools) that only has the stored string_views.
-constexpr std::string build_openai_tool(std::string_view _name, std::string_view _description,
-                                        std::string_view _parameters)
-{
+constexpr std::string build_openai_tool(std::string_view _name,
+                                        std::string_view _description,
+                                        std::string_view _parameters) {
     std::string out = "{\"type\":\"function\",\"function\":{\"name\":\"";
     out += _name;
-    out += "\",\"description\":\"" + json_escape(_description) + "\",\"parameters\":";
+    out += "\",\"description\":\"" + json_escape(_description) +
+           "\",\"parameters\":";
     out += _parameters;
     out += "}}";
     return out;
@@ -429,40 +430,42 @@ constexpr std::string build_openai_tool(std::string_view _name, std::string_view
 
 /// Materializes that wrapper into static storage. Shared by function_schema and
 /// tool_schema so both emit the wrapper identically.
-consteval std::string_view as_openai_tool(std::string_view _name, std::string_view _description,
-                                         std::string _parameters)
-{
-    return std::string_view(
-        std::define_static_string(build_openai_tool(_name, _description, _parameters)));
+consteval std::string_view as_openai_tool(std::string_view _name,
+                                          std::string_view _description,
+                                          std::string _parameters) {
+    return std::string_view(std::define_static_string(
+        build_openai_tool(_name, _description, _parameters)));
 }
 
-/// Schema for a function's parameters. With Style::OpenAiTool this is a complete
-/// tool the caller can hand straight to an API; with Style::JsonSchema it is the
-/// bare parameter object. The wrapper is built here, so callers never assemble
-/// one. The description comes from an optional [[= js::doc{...}]] on the function.
+/// Schema for a function's parameters. With Style::OpenAiTool this is a
+/// complete tool the caller can hand straight to an API; with Style::JsonSchema
+/// it is the bare parameter object. The wrapper is built here, so callers never
+/// assemble one. The description comes from an optional [[= js::doc{...}]] on
+/// the function.
 template <meta::info Fn, Style S = Style::JsonSchema>
-consteval std::string_view function_schema()
-{
+consteval std::string_view function_schema() {
     if constexpr (S == Style::OpenAiTool) {
         return as_openai_tool(meta::identifier_of(Fn), description_of<Fn>(),
                               param_object_schema<Fn>());
     } else {
-        return std::string_view(std::define_static_string(param_object_schema<Fn>()));
+        return std::string_view(
+            std::define_static_string(param_object_schema<Fn>()));
     }
 }
 
-/// Schema for a struct's fields, mirroring function_schema. The tool name is the
-/// type's identifier, and the description comes from an optional
+/// Schema for a struct's fields, mirroring function_schema. The tool name is
+/// the type's identifier, and the description comes from an optional
 /// [[= js::doc{...}]] on the type.
 template <typename T, Style S = Style::JsonSchema>
-consteval std::string_view tool_schema()
-{
+consteval std::string_view tool_schema() {
     if constexpr (S == Style::OpenAiTool) {
-        return as_openai_tool(meta::identifier_of(^^T), description_of<^^T>(),
-                              object_schema_impl<T>(std::make_index_sequence<member_count<T>()>()));
+        return as_openai_tool(
+            meta::identifier_of(^^T), description_of<^^T>(),
+            object_schema_impl<T>(
+                std::make_index_sequence<member_count<T>()>()));
     } else {
-        return std::string_view(std::define_static_string(
-            object_schema_impl<T>(std::make_index_sequence<member_count<T>()>())));
+        return std::string_view(std::define_static_string(object_schema_impl<T>(
+            std::make_index_sequence<member_count<T>()>())));
     }
 }
 
@@ -473,22 +476,20 @@ consteval std::string_view tool_schema()
 // Deserialization is driven by the reflection, so any reflected struct works.
 
 /// A missing required field, or a value whose JSON type does not match the
-/// reflected C++ type. This is a trust boundary: the document comes from a model,
-/// so "540" is not an int and a silently defaulted field is a wrong call, not a
-/// convenience. During nested decoding each level prefixes the field's own name.
+/// reflected C++ type. This is a trust boundary: the document comes from a
+/// model, so "540" is not an int and a silently defaulted field is a wrong
+/// call, not a convenience. During nested decoding each level prefixes the
+/// field's own name.
 struct bind_error : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-template <typename T>
-consteval std::size_t enumerator_count()
-{
+template <typename T> consteval std::size_t enumerator_count() {
     return meta::enumerators_of(^^T).size();
 }
 
 template <typename T>
-consteval std::array<meta::info, enumerator_count<T>()> enumerator_infos()
-{
+consteval std::array<meta::info, enumerator_count<T>()> enumerator_infos() {
     const auto es = meta::enumerators_of(^^T);
     std::array<meta::info, enumerator_count<T>()> out{};
     for (std::size_t i = 0; i < es.size(); ++i) {
@@ -497,46 +498,42 @@ consteval std::array<meta::info, enumerator_count<T>()> enumerator_infos()
     return out;
 }
 
-/// {name, value} table for an enum, materialized as ordinary constants so it can
-/// be indexed at runtime -- meta::extract() itself needs a constant expression.
-template <typename T>
-struct enumerator_table {
+/// {name, value} table for an enum, materialized as ordinary constants so it
+/// can be indexed at runtime -- meta::extract() itself needs a constant
+/// expression.
+template <typename T> struct enumerator_table {
     static constexpr std::size_t size = enumerator_count<T>();
     std::array<std::string_view, size> names;
     std::array<T, size> values;
 };
 
 template <typename T, std::size_t... Is>
-consteval enumerator_table<T> make_enumerator_table_impl(std::index_sequence<Is...>)
-{
+consteval enumerator_table<T>
+make_enumerator_table_impl(std::index_sequence<Is...>) {
     constexpr auto infos = enumerator_infos<T>();
-    return enumerator_table<T>{
-        {std::string_view(std::define_static_string(meta::identifier_of(infos[Is])))...},
-        {meta::extract<T>(infos[Is])...}};
+    return enumerator_table<T>{{std::string_view(std::define_static_string(
+                                   meta::identifier_of(infos[Is])))...},
+                               {meta::extract<T>(infos[Is])...}};
 }
 
-template <typename T>
-consteval enumerator_table<T> make_enumerator_table()
-{
-    return make_enumerator_table_impl<T>(std::make_index_sequence<enumerator_count<T>()>());
+template <typename T> consteval enumerator_table<T> make_enumerator_table() {
+    return make_enumerator_table_impl<T>(
+        std::make_index_sequence<enumerator_count<T>()>());
 }
 
-template <typename T>
-T enum_from_string(const std::string& _name)
-{
+template <typename T> T enum_from_string(const std::string &_name) {
     constexpr auto table = make_enumerator_table<T>();
     for (std::size_t i = 0; i < table.size; ++i) {
         if (table.names[i] == _name) {
             return table.values[i];
         }
     }
-    throw bind_error("invalid " + std::string(meta::identifier_of(^^T)) + " value: " + _name);
+    throw bind_error("invalid " + std::string(meta::identifier_of(^^T)) +
+                     " value: " + _name);
 }
 
 /// Enum -> its reflected enumerator name, the inverse of enum_from_string().
-template <typename T>
-std::string enum_to_string(T _value)
-{
+template <typename T> std::string enum_to_string(T _value) {
     constexpr auto table = make_enumerator_table<T>();
     for (std::size_t i = 0; i < table.size; ++i) {
         if (table.values[i] == _value) {
@@ -546,33 +543,31 @@ std::string enum_to_string(T _value)
     return "?";
 }
 
-template <typename T>
-T from_json(const nlohmann::json& _j);
+template <typename T> T from_json(const nlohmann::json &_j);
 
 /// The member reflection for index `I`, as a constant expression. Reflections
-/// never live in a runtime variable -- std::meta::info is a consteval-only type,
-/// so this is used directly as a template argument.
-template <typename T, std::size_t I>
-consteval meta::info member_at()
-{
+/// never live in a runtime variable -- std::meta::info is a consteval-only
+/// type, so this is used directly as a template argument.
+template <typename T, std::size_t I> consteval meta::info member_at() {
     return member_infos<T>()[I];
 }
 
 template <meta::info M>
-void assign_member(auto& _out, const nlohmann::json& _j)
-{
-    using MT = std::remove_cvref_t<typename [: meta::type_of(M) :]>;
-    constexpr std::string_view name = std::define_static_string(meta::identifier_of(M));
+void assign_member(auto &_out, const nlohmann::json &_j) {
+    using MT = std::remove_cvref_t<typename[:meta::type_of(M):]>;
+    constexpr std::string_view name =
+        std::define_static_string(meta::identifier_of(M));
     const std::string key(name);
     if (!_j.contains(key)) {
-        if constexpr (!is_optional<MT>::value && !meta::has_default_member_initializer(M)) {
+        if constexpr (!is_optional<MT>::value &&
+                      !meta::has_default_member_initializer(M)) {
             throw bind_error("missing required member: " + key);
         }
         return;
     }
     try {
-        _out.[: M :] = from_json<MT>(_j.at(key));
-    } catch (const bind_error& e) {
+        _out.[:M:] = from_json<MT>(_j.at(key));
+    } catch (const bind_error &e) {
         throw bind_error(key + ": " + e.what());
     }
 }
@@ -581,8 +576,7 @@ void assign_member(auto& _out, const nlohmann::json& _j)
 /// so declared defaults and std::nullopt survive a partial document. A member
 /// with neither a default nor std::optional is required and throws when absent.
 template <typename T, std::size_t... Is>
-T object_from_json(const nlohmann::json& _j, std::index_sequence<Is...>)
-{
+T object_from_json(const nlohmann::json &_j, std::index_sequence<Is...>) {
     T out{};
     (assign_member<member_at<T, Is>()>(out, _j), ...);
     return out;
@@ -592,9 +586,7 @@ T object_from_json(const nlohmann::json& _j, std::index_sequence<Is...>)
 /// exact JSON type is accepted: "540" is an error, not a coercion into int, and
 /// 540.0 is not an int either. The document comes from a model, so a mistyped
 /// argument must fail loudly rather than land as a plausible-looking value.
-template <typename T>
-T from_json(const nlohmann::json& _j)
-{
+template <typename T> T from_json(const nlohmann::json &_j) {
     if constexpr (is_optional<T>::value) {
         if (_j.is_null()) {
             return std::nullopt;
@@ -608,7 +600,7 @@ T from_json(const nlohmann::json& _j)
         if constexpr (requires(T t) { t.push_back(V{}); }) {
             T out{};
             out.reserve(_j.size());
-            for (const auto& element : _j) {
+            for (const auto &element : _j) {
                 out.push_back(from_json<V>(element));
             }
             return out;
@@ -616,8 +608,8 @@ T from_json(const nlohmann::json& _j)
             static_assert(is_sequence<T>::fixed_size,
                           "from_json: expected a fixed-size std::array");
             T out{};
-            // std::array length is part of its type, so a partial document is an
-            // error rather than a silently padded result.
+            // std::array length is part of its type, so a partial document is
+            // an error rather than a silently padded result.
             if (_j.size() != out.size()) {
                 throw bind_error("array length mismatch: expected " +
                                  std::to_string(out.size()) + ", got " +
@@ -658,12 +650,13 @@ T from_json(const nlohmann::json& _j)
             throw bind_error("expected string");
         }
         // Borrows from the document, which must outlive the result.
-        return std::string_view(_j.get_ref<const std::string&>());
+        return std::string_view(_j.get_ref<const std::string &>());
     } else if constexpr (std::is_class_v<T>) {
         if (!_j.is_object()) {
             throw bind_error("expected object");
         }
-        return object_from_json<T>(_j, std::make_index_sequence<member_count<T>()>());
+        return object_from_json<T>(
+            _j, std::make_index_sequence<member_count<T>()>());
     } else {
         static_assert(!sizeof(T), "js::from_json: unsupported type");
     }
@@ -671,11 +664,10 @@ T from_json(const nlohmann::json& _j)
 
 /// Builds the argument tuple from the JSON object and actually calls the
 /// function. This is the LLM tool-call path: the model's `arguments` string in,
-/// a real C++ call out. An std::optional key may be omitted; every other one must
-/// be present, and with the exact type it declares.
+/// a real C++ call out. An std::optional key may be omitted; every other one
+/// must be present, and with the exact type it declares.
 template <meta::info Fn, std::size_t I>
-void assign_argument(auto& _args, const nlohmann::json& _j)
-{
+void assign_argument(auto &_args, const nlohmann::json &_j) {
     using PT = param_type_at<Fn, I>;
     constexpr std::string_view name =
         std::define_static_string(meta::identifier_of(param_at<Fn, I>()));
@@ -683,7 +675,7 @@ void assign_argument(auto& _args, const nlohmann::json& _j)
     if (_j.contains(key)) {
         try {
             std::get<I>(_args) = from_json<PT>(_j.at(key));
-        } catch (const bind_error& e) {
+        } catch (const bind_error &e) {
             throw bind_error(key + ": " + e.what());
         }
     } else if constexpr (!is_optional<PT>::value) {
@@ -692,17 +684,16 @@ void assign_argument(auto& _args, const nlohmann::json& _j)
 }
 
 template <meta::info Fn, std::size_t... Is>
-auto invoke_with_json_impl(const nlohmann::json& _j, std::index_sequence<Is...>)
-{
+auto invoke_with_json_impl(const nlohmann::json &_j,
+                           std::index_sequence<Is...>) {
     std::tuple<param_type_at<Fn, Is>...> args{};
     (assign_argument<Fn, Is>(args, _j), ...);
-    return std::apply(&[: Fn :], args);
+    return std::apply(&[:Fn:], args);
 }
 
-template <meta::info Fn>
-auto invoke_with_json(const nlohmann::json& _j)
-{
-    return invoke_with_json_impl<Fn>(_j, std::make_index_sequence<param_count<Fn>()>());
+template <meta::info Fn> auto invoke_with_json(const nlohmann::json &_j) {
+    return invoke_with_json_impl<Fn>(
+        _j, std::make_index_sequence<param_count<Fn>()>());
 }
 
 /// The member-function counterpart of invoke_with_json: `Fn` is a non-static
@@ -710,32 +701,29 @@ auto invoke_with_json(const nlohmann::json& _j)
 /// excludes the implicit object parameter, so parameter indices still line up
 /// with the schema/prompt projections; only the call form differs.
 template <meta::info Fn, typename Self, std::size_t... Is>
-auto invoke_member_impl(Self& _self, const nlohmann::json& _j, std::index_sequence<Is...>)
-{
+auto invoke_member_impl(Self &_self, const nlohmann::json &_j,
+                        std::index_sequence<Is...>) {
     std::tuple<param_type_at<Fn, Is>...> args{};
     (assign_argument<Fn, Is>(args, _j), ...);
-    return (_self.*&[: Fn :])(std::get<Is>(args)...);
+    return (_self.*&[:Fn:])(std::get<Is>(args)...);
 }
 
 template <meta::info Fn, typename Self>
-auto invoke_member_with_json(Self& _self, const nlohmann::json& _j)
-{
-    return invoke_member_impl<Fn>(_self, _j, std::make_index_sequence<param_count<Fn>()>());
+auto invoke_member_with_json(Self &_self, const nlohmann::json &_j) {
+    return invoke_member_impl<Fn>(
+        _self, _j, std::make_index_sequence<param_count<Fn>()>());
 }
 
 // --- serialization: C++ value -> JSON ----------------------------------------
-// The inverse of from_json(), used to dump a reconstructed struct generically so
-// no per-struct print code is needed.
+// The inverse of from_json(), used to dump a reconstructed struct generically
+// so no per-struct print code is needed.
 
-template <typename T>
-std::string to_json(const T& _value);
+template <typename T> std::string to_json(const T &_value);
 
 /// Shortest round-trip text for a number. std::to_string guarantees only six
 /// decimals for floating point, which both loses precision and dresses up
 /// values as "0.750000"; std::to_chars emits the shortest exact form.
-template <typename T>
-std::string number_to_json(T _value)
-{
+template <typename T> std::string number_to_json(T _value) {
     char buf[64];
     const auto result = std::to_chars(buf, buf + sizeof buf, _value);
     return std::string(buf, result.ptr);
@@ -745,11 +733,10 @@ std::string number_to_json(T _value)
 /// absence is how parsing reads "no value", so it is how we write one too.
 /// `_first` tracks whether the separating comma is still owed.
 template <meta::info M, typename T>
-void append_member_json(std::string& _out, const T& _value, bool& _first)
-{
-    using MT = std::remove_cvref_t<typename [: meta::type_of(M) :]>;
+void append_member_json(std::string &_out, const T &_value, bool &_first) {
+    using MT = std::remove_cvref_t<typename[:meta::type_of(M):]>;
     if constexpr (is_optional<MT>::value) {
-        if (!_value.[: M :]) {
+        if (!_value.[:M:]) {
             return;
         }
     }
@@ -757,16 +744,16 @@ void append_member_json(std::string& _out, const T& _value, bool& _first)
         _out += ",";
     }
     _first = false;
-    constexpr std::string_view name = std::define_static_string(meta::identifier_of(M));
+    constexpr std::string_view name =
+        std::define_static_string(meta::identifier_of(M));
     _out += "\"";
     _out += name;
     _out += "\":";
-    _out += to_json(_value.[: M :]);
+    _out += to_json(_value.[:M:]);
 }
 
 template <typename T, std::size_t... Is>
-std::string object_to_json(const T& _value, std::index_sequence<Is...>)
-{
+std::string object_to_json(const T &_value, std::index_sequence<Is...>) {
     std::string out = "{";
     bool first = true;
     (append_member_json<member_at<T, Is>(), T>(out, _value, first), ...);
@@ -774,9 +761,7 @@ std::string object_to_json(const T& _value, std::index_sequence<Is...>)
     return out;
 }
 
-template <typename T>
-std::string to_json(const T& _value)
-{
+template <typename T> std::string to_json(const T &_value) {
     if constexpr (std::is_same_v<T, bool>) {
         return _value ? "true" : "false";
     } else if constexpr (std::is_enum_v<T>) {
@@ -797,7 +782,8 @@ std::string to_json(const T& _value)
         }
         return out + "]";
     } else if constexpr (std::is_class_v<T>) {
-        return object_to_json(_value, std::make_index_sequence<member_count<T>()>());
+        return object_to_json(_value,
+                              std::make_index_sequence<member_count<T>()>());
     } else {
         return "null";
     }
@@ -811,22 +797,20 @@ std::string to_json(const T& _value)
 struct model_entry {
     std::string_view name;
     std::string_view schema;
-    std::string (*dump)(const nlohmann::json&);
+    std::string (*dump)(const nlohmann::json &);
 };
 
-inline std::vector<model_entry>& model_registry()
-{
+inline std::vector<model_entry> &model_registry() {
     static std::vector<model_entry> entries;
     return entries;
 }
 
-/// Names must be unique: duplicate model names would silently collapse to one key
-/// in the emitted object. The registry is populated by static initializers, so
-/// this fires before main() -- a duplicate is a hard startup failure, never a
-/// silent misroute.
-inline void register_model(model_entry _entry)
-{
-    for (const auto& existing : model_registry()) {
+/// Names must be unique: duplicate model names would silently collapse to one
+/// key in the emitted object. The registry is populated by static initializers,
+/// so this fires before main() -- a duplicate is a hard startup failure, never
+/// a silent misroute.
+inline void register_model(model_entry _entry) {
+    for (const auto &existing : model_registry()) {
         if (existing.name == _entry.name) {
             std::cerr << "js: duplicate model name '" << _entry.name
                       << "' (names must be unique)\n";
@@ -838,21 +822,21 @@ inline void register_model(model_entry _entry)
 
 } // namespace js
 
-// Colocated model registration. Use inside the namespace of the entity, after its
-// definition:
+// Colocated model registration. Use inside the namespace of the entity, after
+// its definition:
 //   CPP_REFLECT_MODEL(SearchRequest)     // struct -> JSON Schema, parseable
 // A function-local static backs the registry, so registration order across
 // translation units is safe.
 
-#define CPP_REFLECT_MODEL(Type)                                                                    \
-    namespace {                                                                                    \
-    std::string js_dump_##Type(const nlohmann::json& _j)                                           \
-    {                                                                                              \
-        return ::js::to_json(::js::from_json<Type>(_j));                                           \
-    }                                                                                              \
-    [[maybe_unused]] const int js_reg_model_##Type = [] {                                          \
-        ::js::register_model(                                                                      \
-            ::js::model_entry{#Type, ::js::tool_schema<Type, ::js::Style::OpenAiTool>(), &js_dump_##Type});   \
-        return 0;                                                                                  \
-    }();                                                                                           \
+#define CPP_REFLECT_MODEL(Type)                                                \
+    namespace {                                                                \
+    std::string js_dump_##Type(const nlohmann::json &_j) {                     \
+        return ::js::to_json(::js::from_json<Type>(_j));                       \
+    }                                                                          \
+    [[maybe_unused]] const int js_reg_model_##Type = [] {                      \
+        ::js::register_model(::js::model_entry{                                \
+            #Type, ::js::tool_schema<Type, ::js::Style::OpenAiTool>(),         \
+            &js_dump_##Type});                                                 \
+        return 0;                                                              \
+    }();                                                                       \
     }

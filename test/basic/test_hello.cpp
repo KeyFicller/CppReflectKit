@@ -1,7 +1,7 @@
 #include "scaffold/hello.h"
 
-// Reflect a struct's members and an enum's enumerators. Every expectation here is
-// known at compile time, so it is a static_assert: if the reflection yields
+// Reflect a struct's members and an enum's enumerators. Every expectation here
+// is known at compile time, so it is a static_assert: if the reflection yields
 // something else the file does not compile, which is the test.
 
 static_assert(pod_member_count() == 3, "PodStruct reflects three members");

@@ -18,20 +18,22 @@ struct PodStruct {
     double m_mem_real;
     std::string m_mem_str;
 
-    PodStruct operator+([[maybe_unused]] const PodStruct& _other) const { return {}; }
+    PodStruct operator+([[maybe_unused]] const PodStruct &_other) const {
+        return {};
+    }
 };
 
-consteval std::size_t pod_member_count()
-{
-    return std::define_static_array(std::meta::nonstatic_data_members_of(
-                                        ^^PodStruct, std::meta::access_context::unchecked()))
+consteval std::size_t pod_member_count() {
+    return std::define_static_array(
+               std::meta::nonstatic_data_members_of(
+                   ^^PodStruct, std::meta::access_context::unchecked()))
         .size();
 }
 
-consteval bool all_members_are_nonstatic()
-{
-    template for (constexpr std::meta::info member : std::define_static_array(
-        std::meta::nonstatic_data_members_of(^^PodStruct, std::meta::access_context::unchecked()))) {
+consteval bool all_members_are_nonstatic() {
+    template for (constexpr std::meta::info member :
+                  std::define_static_array(std::meta::nonstatic_data_members_of(
+                      ^^PodStruct, std::meta::access_context::unchecked()))) {
         if (!std::meta::is_nonstatic_data_member(member)) {
             return false;
         }

@@ -4,11 +4,14 @@
 
 #include "app_server.h"
 
-// MCP stdio entry: the concrete server over std::cin/std::cout, newline-delimited
-// JSON-RPC 2.0. main() routes `--mcp` here ahead of the generic `--*` branch, so
-// stdout stays a protocol stream rather than a single JSON document.
-int bridge::run_mcp()
-{
+// MCP entries. `--mcp` is the local transport (an agent owns the process).
+// `--http` is the external one (this process is already up; agents POST /mcp).
+int bridge::run_mcp() {
     app::CppReflectServer server;
-    return server.serve(std::cin, std::cout);
+    return server.stdio();
+}
+
+int bridge::run_http(int _port) {
+    app::CppReflectServer server;
+    return server.serve_http(_port);
 }

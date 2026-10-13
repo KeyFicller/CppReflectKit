@@ -1,0 +1,11 @@
+---
+# The project's C++ style: LLVM layout on a 4-space indent.
+#
+# This is the single source of truth for C++ formatting; clang-format and
+# clangd both read it. `.editorconfig` mirrors the indent for editors that
+# do not.
+BasedOnStyle: LLVM
+IndentWidth: 4
+# Level with the enclosing class/struct, the way the 2-space style had it:
+# with IndentWidth 4 the LLVM default of -2 leaves modifiers half a level in.
+AccessModifierOffset: -4

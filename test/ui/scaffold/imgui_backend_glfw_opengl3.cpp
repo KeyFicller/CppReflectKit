@@ -26,13 +26,11 @@
 
 namespace {
 
-static void glfw_error_callback(int error, const char* description)
-{
+static void glfw_error_callback(int error, const char *description) {
     std::fprintf(stderr, "GLFW Error %d: %s\n", error, description);
 }
 
-static void cppref_configure_glfw_opengl()
-{
+static void cppref_configure_glfw_opengl() {
 #if defined(__APPLE__)
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
@@ -48,8 +46,7 @@ static void cppref_configure_glfw_opengl()
 
 } // namespace
 
-void run_imgui_demo_window(std::function<void()> my_draw_callback)
-{
+void run_imgui_demo_window(std::function<void()> my_draw_callback) {
     glfwSetErrorCallback(glfw_error_callback);
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
@@ -58,8 +55,9 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
 
     cppref_configure_glfw_opengl();
 
-    GLFWwindow* window =
-        glfwCreateWindow(1280, 720, "CppReflectKit — ImGui docking (GLFW + OpenGL 3)", nullptr, nullptr);
+    GLFWwindow *window = glfwCreateWindow(
+        1280, 720, "CppReflectKit — ImGui docking (GLFW + OpenGL 3)", nullptr,
+        nullptr);
     if (!window) {
         glfwTerminate();
         std::fprintf(stderr, "glfwCreateWindow failed\n");
@@ -71,7 +69,7 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -104,7 +102,8 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
         }
 
         ImGui::Begin("CppReflectKit");
-        ImGui::TextUnformatted("Backend: GLFW + OpenGL 3 (Dear ImGui docking branch). Drag tab bar to dock windows.");
+        ImGui::TextUnformatted("Backend: GLFW + OpenGL 3 (Dear ImGui docking "
+                               "branch). Drag tab bar to dock windows.");
         ImGui::Checkbox("ImGui Demo", &show_demo_window);
         ImGui::End();
 
@@ -116,8 +115,9 @@ void run_imgui_demo_window(std::function<void()> my_draw_callback)
         glfwGetFramebufferSize(window, &display_w, &display_h);
         glViewport(0, 0, display_w, display_h);
         const ImVec4 clear_color = ImVec4(0.06f, 0.06f, 0.07f, 1.00f);
-        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w,
-                     clear_color.w);
+        glClearColor(clear_color.x * clear_color.w,
+                     clear_color.y * clear_color.w,
+                     clear_color.z * clear_color.w, clear_color.w);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

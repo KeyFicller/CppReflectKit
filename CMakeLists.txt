@@ -154,12 +154,19 @@ if(CPPREF_DEPS_FROM_GITHUB)
   set(CPPREF_IMGUI_URL "https://github.com/ocornut/imgui.git" CACHE STRING "")
   set(CPPREF_NLOHMANN_JSON_URL "https://github.com/nlohmann/json.git" CACHE STRING "")
   set(CPPREF_GOOGLETEST_URL "https://github.com/google/googletest.git" CACHE STRING "")
+  # cpp-httplib has no gitee mirror; both dep modes fetch it from github.
+  set(CPPREF_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib.git" CACHE STRING "")
+  # cppcodec has no gitee mirror either.
+  set(CPPREF_CPPCODEC_URL "https://github.com/tplgy/cppcodec.git" CACHE STRING "")
 else()
   set(CPPREF_YAML_CPP_URL "https://gitee.com/mirrors/yaml-cpp.git" CACHE STRING "")
   set(CPPREF_GLFW_URL "https://gitee.com/mirrors/glfw.git" CACHE STRING "")
   set(CPPREF_IMGUI_URL "https://gitee.com/mirrors/imgui.git" CACHE STRING "")
   set(CPPREF_NLOHMANN_JSON_URL "https://gitee.com/mirrors/nlohmann-json.git" CACHE STRING "")
   set(CPPREF_GOOGLETEST_URL "https://gitee.com/mirrors/googletest.git" CACHE STRING "")
+  set(CPPREF_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib.git" CACHE STRING "")
+  # cppcodec: no gitee mirror, so this branch uses github too.
+  set(CPPREF_CPPCODEC_URL "https://github.com/tplgy/cppcodec.git" CACHE STRING "")
 endif()
 
 include(FetchContent)
@@ -232,8 +239,47 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
   cppreflect_library(json)
   target_link_libraries(cppreflect_json INTERFACE nlohmann_json::nlohmann_json)
 
+  # cpp-httplib: Streamable HTTP for serve_http(). Plain HTTP only. An external
+  # agent on localhost does not need TLS, and finding OpenSSL here just to
+  # leave it unused pulls a second stack into the build.
+  if(NOT TARGET httplib::httplib)
+    set(HTTPLIB_INSTALL OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_TEST OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+      cpp_httplib
+      GIT_REPOSITORY "${CPPREF_HTTPLIB_URL}"
+      GIT_TAG v0.60.1
+      GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(cpp_httplib)
+  endif()
+
+  # cppcodec: header-only, for the base64 payload of the `Mcp-Name` sentinel.
+  # Upstream's own CMakeLists is a 2.8-era OBJECT library that also builds its
+  # examples and tests and sets CMAKE_CXX_FLAGS globally, so it is bypassed:
+  # SOURCE_SUBDIR names the header directory, which holds no CMakeLists.txt, and
+  # FetchContent then populates the source without add_subdirectory().
+  if(NOT TARGET cppcodec::cppcodec)
+    FetchContent_Declare(
+      cppcodec
+      GIT_REPOSITORY "${CPPREF_CPPCODEC_URL}"
+      GIT_TAG v0.2
+      GIT_SHALLOW TRUE
+      SOURCE_SUBDIR "cppcodec"
+    )
+    FetchContent_MakeAvailable(cppcodec)
+    add_library(cppcodec_headers INTERFACE)
+    add_library(cppcodec::cppcodec ALIAS cppcodec_headers)
+    target_include_directories(cppcodec_headers INTERFACE "${cppcodec_SOURCE_DIR}")
+  endif()
+
   cppreflect_library(mcp)
-  target_link_libraries(cppreflect_mcp INTERFACE cppreflect_json)
+  target_link_libraries(cppreflect_mcp INTERFACE cppreflect_json httplib::httplib
+                                               cppcodec::cppcodec)
 endif()
 
 # --- ui: needs Dear ImGui, which upstream ships without a CMakeLists ---------

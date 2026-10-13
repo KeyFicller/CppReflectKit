@@ -14,10 +14,7 @@
 #include <string>
 #include <vector>
 
-enum class Unit {
-    Celsius,
-    Fahrenheit
-};
+enum class Unit { Celsius, Fahrenheit };
 
 struct Nested {
     int m_a = 1;
@@ -25,7 +22,8 @@ struct Nested {
 };
 
 struct DbObject : undo::DbObject<DbObject> {
-    explicit DbObject(undo::Session& _session) : undo::DbObject<DbObject>(_session) {}
+    explicit DbObject(undo::Session &_session)
+        : undo::DbObject<DbObject>(_session) {}
 
     MEMBER(int, m_int, 3);
     MEMBER(int, m_int2, 4);

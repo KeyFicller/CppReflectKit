@@ -27,27 +27,25 @@ enum class WeekDay {
     Sunday
 };
 
-consteval std::size_t pod_member_count()
-{
-    return std::define_static_array(std::meta::nonstatic_data_members_of(
-                                        ^^PodStruct, std::meta::access_context::unchecked()))
+consteval std::size_t pod_member_count() {
+    return std::define_static_array(
+               std::meta::nonstatic_data_members_of(
+                   ^^PodStruct, std::meta::access_context::unchecked()))
         .size();
 }
 
-consteval std::string_view pod_member(std::size_t _index)
-{
+consteval std::string_view pod_member(std::size_t _index) {
     return std::meta::identifier_of(
         std::define_static_array(std::meta::nonstatic_data_members_of(
-                                     ^^PodStruct, std::meta::access_context::unchecked()))[_index]);
+            ^^PodStruct, std::meta::access_context::unchecked()))[_index]);
 }
 
-consteval std::size_t weekday_count()
-{
-    return std::define_static_array(std::meta::enumerators_of(^^WeekDay)).size();
+consteval std::size_t weekday_count() {
+    return std::define_static_array(std::meta::enumerators_of(^^WeekDay))
+        .size();
 }
 
-consteval std::string_view weekday(std::size_t _index)
-{
+consteval std::string_view weekday(std::size_t _index) {
     return std::meta::identifier_of(
         std::define_static_array(std::meta::enumerators_of(^^WeekDay))[_index]);
 }

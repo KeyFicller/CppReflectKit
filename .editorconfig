@@ -1,0 +1,6 @@
+# Mirrors .clang-format for editors that do not read it.
+root = true
+
+[*.{c,cc,cpp,cxx,h,hh,hpp,hxx}]
+indent_style = space
+indent_size = 4

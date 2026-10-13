@@ -7,22 +7,21 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
-#include "scaffold/app_server.h"
 #include "llm/reflection_json.h"
+#include "scaffold/app_server.h"
 
-// JSON Schema generated from C++26 static reflection, validated with a real JSON
-// parser (nlohmann/json). The schemas are consteval strings, but their content is
-// only meaningful once parsed, so these are runtime EXPECT checks.
+// JSON Schema generated from C++26 static reflection, validated with a real
+// JSON parser (nlohmann/json). The schemas are consteval strings, but their
+// content is only meaningful once parsed, so these are runtime EXPECT checks.
 
 namespace {
 
 using json = nlohmann::json;
 
-std::optional<json> parse_json(std::string_view _text)
-{
+std::optional<json> parse_json(std::string_view _text) {
     try {
         return json::parse(_text);
-    } catch (const json::exception&) {
+    } catch (const json::exception &) {
         return std::nullopt;
     }
 }
@@ -30,21 +29,24 @@ std::optional<json> parse_json(std::string_view _text)
 /// Recursively checks every object schema in `_doc`: nodes with
 /// "type":"object" must carry "properties" and a "required" array, and every
 /// required name must be declared in "properties".
-bool check_object_shapes(const json& _doc, const std::string& _path)
-{
+bool check_object_shapes(const json &_doc, const std::string &_path) {
     if (_doc.is_object()) {
-        const bool is_object_schema = _doc.contains("type") && _doc.at("type").is_string() &&
-                                      _doc.at("type").get<std::string>() == "object";
+        const bool is_object_schema =
+            _doc.contains("type") && _doc.at("type").is_string() &&
+            _doc.at("type").get<std::string>() == "object";
         if (is_object_schema) {
-            if (!_doc.contains("properties") || !_doc.at("properties").is_object()) {
-                ADD_FAILURE() << _path << ": \"properties\" is missing or not an object";
+            if (!_doc.contains("properties") ||
+                !_doc.at("properties").is_object()) {
+                ADD_FAILURE()
+                    << _path << ": \"properties\" is missing or not an object";
                 return false;
             }
             if (!_doc.contains("required") || !_doc.at("required").is_array()) {
-                ADD_FAILURE() << _path << ": \"required\" is missing or not an array";
+                ADD_FAILURE()
+                    << _path << ": \"required\" is missing or not an array";
                 return false;
             }
-            for (const auto& name : _doc.at("required")) {
+            for (const auto &name : _doc.at("required")) {
                 const std::string key = name.get<std::string>();
                 if (!_doc.at("properties").contains(key)) {
                     ADD_FAILURE() << _path << ": \"required\" lists \"" << key
@@ -53,14 +55,15 @@ bool check_object_shapes(const json& _doc, const std::string& _path)
                 }
             }
         }
-        for (const auto& [key, value] : _doc.items()) {
+        for (const auto &[key, value] : _doc.items()) {
             if (!check_object_shapes(value, _path + "/" + key)) {
                 return false;
             }
         }
     } else if (_doc.is_array()) {
         for (std::size_t i = 0; i < _doc.size(); ++i) {
-            if (!check_object_shapes(_doc.at(i), _path + "/" + std::to_string(i))) {
+            if (!check_object_shapes(_doc.at(i),
+                                     _path + "/" + std::to_string(i))) {
                 return false;
             }
         }
@@ -68,8 +71,7 @@ bool check_object_shapes(const json& _doc, const std::string& _path)
     return true;
 }
 
-bool check_schema(const char* _label, std::string_view _text)
-{
+bool check_schema(const char *_label, std::string_view _text) {
     const auto doc = parse_json(_text);
     if (!doc) {
         ADD_FAILURE() << _label << ": not well-formed JSON";
@@ -78,70 +80,72 @@ bool check_schema(const char* _label, std::string_view _text)
     return check_object_shapes(*doc, _label);
 }
 
-/// The OpenAI tool wrapper: {"type":"function","function":{name,description,parameters}}.
-bool check_tool_schema(const char* _label, std::string_view _text)
-{
+/// The OpenAI tool wrapper:
+/// {"type":"function","function":{name,description,parameters}}.
+bool check_tool_schema(const char *_label, std::string_view _text) {
     const auto doc = parse_json(_text);
     if (!doc) {
         ADD_FAILURE() << _label << ": not well-formed JSON";
         return false;
     }
-    if (!doc->contains("type") || doc->at("type") != "function" || !doc->contains("function") ||
-        !doc->at("function").is_object()) {
+    if (!doc->contains("type") || doc->at("type") != "function" ||
+        !doc->contains("function") || !doc->at("function").is_object()) {
         ADD_FAILURE() << _label << ": missing the OpenAI tool wrapper";
         return false;
     }
-    const json& fn = doc->at("function");
-    for (const char* key : {"name", "description", "parameters"}) {
+    const json &fn = doc->at("function");
+    for (const char *key : {"name", "description", "parameters"}) {
         if (!fn.contains(key)) {
-            ADD_FAILURE() << _label << ": \"function." << key << "\" is missing";
+            ADD_FAILURE() << _label << ": \"function." << key
+                          << "\" is missing";
             return false;
         }
     }
     if (!fn.at("name").is_string() || !fn.at("description").is_string()) {
-        ADD_FAILURE() << _label << ": \"function.name\"/\"description\" are not strings";
+        ADD_FAILURE() << _label
+                      << ": \"function.name\"/\"description\" are not strings";
         return false;
     }
-    return check_object_shapes(fn.at("parameters"), std::string(_label) + "/parameters");
+    return check_object_shapes(fn.at("parameters"),
+                               std::string(_label) + "/parameters");
 }
 
-std::size_t count_descriptions(const json& _doc)
-{
+std::size_t count_descriptions(const json &_doc) {
     std::size_t n = 0;
     if (_doc.is_object()) {
         if (_doc.contains("description")) {
             ++n;
         }
-        for (const auto& [key, value] : _doc.items()) {
+        for (const auto &[key, value] : _doc.items()) {
             n += count_descriptions(value);
         }
     } else if (_doc.is_array()) {
-        for (const auto& value : _doc) {
+        for (const auto &value : _doc) {
             n += count_descriptions(value);
         }
     }
     return n;
 }
 
-void expect_description(const json& _properties, const char* _name, const char* _expected)
-{
-    ASSERT_TRUE(_properties.contains(_name)) << "property \"" << _name << "\" is missing";
+void expect_description(const json &_properties, const char *_name,
+                        const char *_expected) {
+    ASSERT_TRUE(_properties.contains(_name))
+        << "property \"" << _name << "\" is missing";
     ASSERT_TRUE(_properties.at(_name).contains("description"))
         << "property \"" << _name << "\" carries no description";
-    EXPECT_EQ(_properties.at(_name).at("description").get<std::string>(), _expected);
+    EXPECT_EQ(_properties.at(_name).at("description").get<std::string>(),
+              _expected);
 }
 
-/// Runs `_fn` and returns the message of the js::bind_error it throws, or a marker
-/// for any other outcome, so a test can assert the error type and its text
-/// together: a strict binder must fail loudly, not coerce.
-template <typename Fn>
-std::string bind_error_message(Fn&& _fn)
-{
+/// Runs `_fn` and returns the message of the js::bind_error it throws, or a
+/// marker for any other outcome, so a test can assert the error type and its
+/// text together: a strict binder must fail loudly, not coerce.
+template <typename Fn> std::string bind_error_message(Fn &&_fn) {
     try {
         _fn();
-    } catch (const js::bind_error& e) {
+    } catch (const js::bind_error &e) {
         return e.what();
-    } catch (const std::exception& e) {
+    } catch (const std::exception &e) {
         return std::string("(not a bind_error) ") + e.what();
     }
     return "(no error)";
@@ -149,8 +153,7 @@ std::string bind_error_message(Fn&& _fn)
 
 /// Decodes a SearchRequest from `_text`; a malformed fixture surfaces through
 /// bind_error_message as a "(not a bind_error)" message rather than crashing.
-app::SearchRequest decode_request(std::string_view _text)
-{
+app::SearchRequest decode_request(std::string_view _text) {
     const auto doc = parse_json(_text);
     if (!doc) {
         throw std::runtime_error("test fixture is not valid JSON");
@@ -158,45 +161,47 @@ app::SearchRequest decode_request(std::string_view _text)
     return js::from_json<app::SearchRequest>(*doc);
 }
 
-constexpr std::string_view fn_schema = js::function_schema<^^app::CppReflectServer::search_documents>();
+constexpr std::string_view fn_schema =
+    js::function_schema<^^app::CppReflectServer::search_documents>();
 constexpr std::string_view tool_schema =
-    js::function_schema<^^app::CppReflectServer::search_documents, js::Style::OpenAiTool>();
+    js::function_schema<^^app::CppReflectServer::search_documents,
+                        js::Style::OpenAiTool>();
 constexpr std::string_view query_schema = js::tool_schema<app::Query>();
-constexpr std::string_view request_schema = js::tool_schema<app::SearchRequest>();
+constexpr std::string_view request_schema =
+    js::tool_schema<app::SearchRequest>();
 
 } // namespace
 
-TEST(JsonSchema, generated_shapes_are_well_formed)
-{
+TEST(JsonSchema, generated_shapes_are_well_formed) {
     EXPECT_TRUE(check_schema("function schema", fn_schema));
     EXPECT_TRUE(check_tool_schema("openai tool", tool_schema));
     EXPECT_TRUE(check_schema("struct Query", query_schema));
     EXPECT_TRUE(check_schema("struct SearchRequest", request_schema));
 }
 
-TEST(JsonSchema, descriptions_come_from_the_annotations)
-{
+TEST(JsonSchema, descriptions_come_from_the_annotations) {
     const auto tool = parse_json(tool_schema);
     ASSERT_TRUE(tool.has_value());
-    const auto& props = tool->at("function").at("parameters").at("properties");
+    const auto &props = tool->at("function").at("parameters").at("properties");
     expect_description(props, "query", "The raw query text.");
     expect_description(props, "limit", "Maximum number of hits to return.");
-    expect_description(props, "exact_match", "Require an exact (case-sensitive) match.");
+    expect_description(props, "exact_match",
+                       "Require an exact (case-sensitive) match.");
 
     const auto query = parse_json(query_schema);
     ASSERT_TRUE(query.has_value());
     expect_description(query->at("properties"), "text", "The raw query text.");
-    expect_description(query->at("properties").at("ranges").at("items").at("properties"), "max",
-                       "Optional inclusive upper bound.");
+    expect_description(
+        query->at("properties").at("ranges").at("items").at("properties"),
+        "max", "Optional inclusive upper bound.");
 
     const auto request = parse_json(request_schema);
     ASSERT_TRUE(request.has_value());
-    expect_description(request->at("properties").at("query").at("properties"), "unit",
-                       "Temperature unit for numeric filters.");
+    expect_description(request->at("properties").at("query").at("properties"),
+                       "unit", "Temperature unit for numeric filters.");
 }
 
-TEST(JsonSchema, schema_annotations_survive_serialization)
-{
+TEST(JsonSchema, schema_annotations_survive_serialization) {
     const auto count_of = [](std::string_view _text) {
         const auto doc = parse_json(_text);
         return doc ? count_descriptions(*doc) : std::size_t{0};
@@ -205,9 +210,8 @@ TEST(JsonSchema, schema_annotations_survive_serialization)
     EXPECT_GT(count_of(request_schema), 0u);
 }
 
-TEST(JsonSchema, from_json_decodes_into_the_struct)
-{
-    const char* request_json = R"({
+TEST(JsonSchema, from_json_decodes_into_the_struct) {
+    const char *request_json = R"({
         "query": {
             "text": "static reflection",
             "unit": "Fahrenheit",
@@ -226,123 +230,139 @@ TEST(JsonSchema, from_json_decodes_into_the_struct)
     ASSERT_EQ(req.query.ranges.size(), 2u);
     EXPECT_EQ(req.query.ranges[0].min, 1);
     EXPECT_EQ(req.query.ranges[0].max, std::optional<int>{10});
-    EXPECT_EQ(req.query.ranges[1].max, std::nullopt) << "an absent optional member stays empty";
+    EXPECT_EQ(req.query.ranges[1].max, std::nullopt)
+        << "an absent optional member stays empty";
     EXPECT_EQ(req.query.weight, std::optional<double>{0.75});
     EXPECT_EQ(req.top_k, (std::array<int, 3>{3, 5, 8}));
     EXPECT_FALSE(req.debug) << "an absent member keeps its default";
 }
 
-TEST(JsonSchema, json_arguments_drive_a_real_member_call)
-{
+TEST(JsonSchema, json_arguments_drive_a_real_member_call) {
     app::CppReflectServer server;
 
-    const auto doc = parse_json(R"({"query":"reflection","limit":2,"exact_match":true})");
+    const auto doc =
+        parse_json(R"({"query":"reflection","limit":2,"exact_match":true})");
     ASSERT_TRUE(doc.has_value());
     const auto text =
-        js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(server, *doc);
+        js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(
+            server, *doc);
 
-    // The call reached the real tool, so the payload echoes the arguments and the
-    // hits name files the corpus actually has.
+    // The call reached the real tool, so the payload echoes the arguments and
+    // the hits name files the corpus actually has.
     const auto payload = parse_json(text);
     ASSERT_TRUE(payload.has_value());
     EXPECT_EQ(payload->at("query"), "reflection");
     EXPECT_EQ(payload->at("limit"), 2);
     EXPECT_TRUE(payload->at("exact_match").get<bool>());
-    ASSERT_FALSE(payload->at("hits").empty()) << "the corpus yields hits for 'reflection'";
-    for (const auto& hit : payload->at("hits")) {
-        EXPECT_TRUE(hit.contains("file") && hit.contains("line") && hit.contains("text"));
+    ASSERT_FALSE(payload->at("hits").empty())
+        << "the corpus yields hits for 'reflection'";
+    for (const auto &hit : payload->at("hits")) {
+        EXPECT_TRUE(hit.contains("file") && hit.contains("line") &&
+                    hit.contains("text"));
     }
 }
 
 // A document arrives from a model, so every value must match the reflected type
-// exactly: a mistyped field is an error, never a coercion, and the message names
-// the field it failed on so the model can correct itself.
+// exactly: a mistyped field is an error, never a coercion, and the message
+// names the field it failed on so the model can correct itself.
 
-TEST(JsonSchema, a_mistyped_scalar_is_rejected)
-{
+TEST(JsonSchema, a_mistyped_scalar_is_rejected) {
     // An int is not a string, and a float is not an int.
-    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":42,"ranges":[]}})"); }),
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":42,"ranges":[]}})");
+              }),
               "query: text: expected string");
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[{"min":"1"}]}})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[{"min":"1"}]}})");
               }),
               "query: ranges: min: expected integer");
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[{"min":1.5}]}})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[{"min":1.5}]}})");
               }),
               "query: ranges: min: expected integer");
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[]},"debug":"true"})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[]},"debug":"true"})");
               }),
               "debug: expected boolean");
 }
 
-TEST(JsonSchema, a_mistyped_container_is_rejected)
-{
-    // A sequence must be an array and a class must be an object; neither is coerced.
+TEST(JsonSchema, a_mistyped_container_is_rejected) {
+    // A sequence must be an array and a class must be an object; neither is
+    // coerced.
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":"nope"}})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":"nope"}})");
               }),
               "query: ranges: expected array");
-    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":"x","ranges":{}}})"); }),
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(R"({"query":{"text":"x","ranges":{}}})");
+              }),
               "query: ranges: expected array");
-    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":[]})"); }),
-              "query: expected object");
+    EXPECT_EQ(
+        bind_error_message([] { (void)decode_request(R"({"query":[]})"); }),
+        "query: expected object");
 }
 
-TEST(JsonSchema, an_array_of_the_wrong_length_is_rejected)
-{
+TEST(JsonSchema, an_array_of_the_wrong_length_is_rejected) {
     // std::array's length is part of its type, so a short document is an error
     // rather than a silently padded result.
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[]},"top_k":[1,2]})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[]},"top_k":[1,2]})");
               }),
               "top_k: array length mismatch: expected 3, got 2");
 }
 
-TEST(JsonSchema, a_mistyped_enum_is_rejected)
-{
-    // An enum is a JSON string: a number is not one, and an unknown name is not an
-    // enumerator. Both carry the field's path.
+TEST(JsonSchema, a_mistyped_enum_is_rejected) {
+    // An enum is a JSON string: a number is not one, and an unknown name is not
+    // an enumerator. Both carry the field's path.
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[],"unit":1}})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[],"unit":1}})");
               }),
               "query: unit: expected string");
     EXPECT_EQ(bind_error_message([] {
-                  (void)decode_request(R"({"query":{"text":"x","ranges":[],"unit":"Kelvin"}})");
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[],"unit":"Kelvin"}})");
               }),
               "query: unit: invalid Unit value: Kelvin");
 }
 
-TEST(JsonSchema, a_missing_required_member_is_rejected)
-{
-    // `text` and `ranges` carry no initializer, so they must be present; `unit` and
-    // `debug` do, so they may be omitted.
-    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"ranges":[]}})"); }),
+TEST(JsonSchema, a_missing_required_member_is_rejected) {
+    // `text` and `ranges` carry no initializer, so they must be present; `unit`
+    // and `debug` do, so they may be omitted.
+    EXPECT_EQ(bind_error_message(
+                  [] { (void)decode_request(R"({"query":{"ranges":[]}})"); }),
               "query: missing required member: text");
-    EXPECT_EQ(bind_error_message([] { (void)decode_request(R"({"query":{"text":"x"}})"); }),
+    EXPECT_EQ(bind_error_message(
+                  [] { (void)decode_request(R"({"query":{"text":"x"}})"); }),
               "query: missing required member: ranges");
 }
 
-TEST(JsonSchema, the_tool_call_path_binds_the_same_way)
-{
-    // The function path shares from_json, and an argument with no default and no
-    // std::optional must be supplied; a mistyped one names the argument.
+TEST(JsonSchema, the_tool_call_path_binds_the_same_way) {
+    // The function path shares from_json, and an argument with no default and
+    // no std::optional must be supplied; a mistyped one names the argument.
     app::CppReflectServer server;
 
     const auto missing = parse_json(R"({"limit":5,"exact_match":true})");
     ASSERT_TRUE(missing.has_value());
     EXPECT_EQ(bind_error_message([&] {
-                  (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(
-                      server, *missing);
+                  (void)js::invoke_member_with_json<
+                      ^^app::CppReflectServer::search_documents>(server,
+                                                                 *missing);
               }),
               "missing required argument: query");
 
-    const auto mistyped = parse_json(R"({"query":5,"limit":5,"exact_match":true})");
+    const auto mistyped =
+        parse_json(R"({"query":5,"limit":5,"exact_match":true})");
     ASSERT_TRUE(mistyped.has_value());
     EXPECT_EQ(bind_error_message([&] {
-                  (void)js::invoke_member_with_json<^^app::CppReflectServer::search_documents>(
-                      server, *mistyped);
+                  (void)js::invoke_member_with_json<
+                      ^^app::CppReflectServer::search_documents>(server,
+                                                                 *mistyped);
               }),
               "query: expected string");
 }

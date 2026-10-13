@@ -1,5 +1,6 @@
 #include "bridge.h"
 
+#include <charconv>
 #include <cstring>
 #include <exception>
 #include <iostream>
@@ -12,7 +13,7 @@
 // The app entry point: the process llm_client.py spawns. The CLI/MCP modes are
 // routed first; with no arguments (or gtest's own flags) it runs the runtime
 // tests defined in this directory.
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
 
     // Long-running mode for joint debugging: lldb launches this once and holds
     // it open while Python drives through the socket.
@@ -20,16 +21,33 @@ int main(int argc, char* argv[]) {
         return bridge::serve(argc > 2 ? argv[2] : "/tmp/cpp_reflect.sock");
     }
 
-    // MCP server mode: newline-delimited JSON-RPC 2.0 on stdin/stdout. Kept
-    // ahead of the "--" CLI branch below, whose stdout must stay a single JSON
-    // document rather than a protocol stream.
+    // Local MCP: an agent launches this process and speaks on stdin/stdout.
+    // Kept ahead of the "--" CLI branch below, whose stdout must stay a single
+    // JSON document rather than a protocol stream.
     if (argc > 1 && std::strcmp(argv[1], "--mcp") == 0) {
         return bridge::run_mcp();
     }
 
-    // gtest's own flags (--gtest_list_tests, --gtest_filter, ...) must reach gtest,
-    // not the CLI branch below, which rejects anything starting with "--".
-    const bool gtest_flag = argc > 1 && std::strncmp(argv[1], "--gtest", 7) == 0;
+    // External MCP: this process is already running; agents POST /mcp.
+    if (argc > 1 && std::strcmp(argv[1], "--http") == 0) {
+        int port = 8765;
+        if (argc > 2) {
+            const char *text = argv[2];
+            const char *end = text + std::strlen(text);
+            const auto [ptr, ec] = std::from_chars(text, end, port);
+            if (ec != std::errc{} || ptr != end || port < 0 || port > 65535) {
+                std::cerr << "http: port must be 0..65535\n";
+                return 1;
+            }
+        }
+        return bridge::run_http(port);
+    }
+
+    // gtest's own flags (--gtest_list_tests, --gtest_filter, ...) must reach
+    // gtest, not the CLI branch below, which rejects anything starting with
+    // "--".
+    const bool gtest_flag =
+        argc > 1 && std::strncmp(argv[1], "--gtest", 7) == 0;
 
     // CLI modes used by the Python LLM loop.
     if (!gtest_flag && argc > 1 && std::strncmp(argv[1], "--", 2) == 0) {
@@ -37,7 +55,7 @@ int main(int argc, char* argv[]) {
         try {
             std::println("{}", bridge::run_request(args, std::cin));
             return 0;
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             std::cerr << e.what() << '\n';
             return 1;
         }
