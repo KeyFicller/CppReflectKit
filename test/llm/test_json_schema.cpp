@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -169,6 +170,20 @@ constexpr std::string_view tool_schema =
 constexpr std::string_view query_schema = js::tool_schema<app::Query>();
 constexpr std::string_view request_schema =
     js::tool_schema<app::SearchRequest>();
+
+// A shape union. No member carries a default initializer: a defaulted member is
+// absent from "required", and an absent field matches every alternative, which
+// would make the union undecidable.
+struct Rectangle {
+    double width;
+    double height;
+};
+struct Circle {
+    double radius;
+};
+using Shape = std::variant<Rectangle, Circle>;
+constexpr std::string_view shape_schema =
+    std::define_static_string(js::param_schema<Shape>());
 
 } // namespace
 
@@ -365,4 +380,112 @@ TEST(JsonSchema, the_tool_call_path_binds_the_same_way) {
                                                                  *mistyped);
               }),
               "query: expected string");
+}
+
+// A std::variant is an anyOf over its alternatives, and decoding one means
+// deciding which alternative the document is. Exactly one alternative must fit:
+// zero is a document no alternative describes, and two is a document that does
+// not say which alternative it is. Neither is guessed at, because a guess lands
+// a plausible-looking wrong value -- the failure mode from_json exists to
+// prevent.
+
+TEST(JsonSchema, a_variant_is_an_any_of_over_its_alternatives) {
+    const auto shape = parse_json(shape_schema);
+    ASSERT_TRUE(shape.has_value());
+    const json &any_of = shape->at("anyOf");
+    ASSERT_TRUE(any_of.is_array());
+    ASSERT_EQ(any_of.size(), 2u) << "one branch per alternative";
+    // Order follows the declaration, and each branch is the alternative's own
+    // object schema.
+    EXPECT_EQ(any_of.at(0).at("required"), json::array({"width", "height"}));
+    EXPECT_EQ(any_of.at(1).at("required"), json::array({"radius"}));
+    EXPECT_FALSE(shape->contains("oneOf"))
+        << "oneOf is rejected by OpenAI and Anthropic tool schemas";
+}
+
+TEST(JsonSchema, a_variant_decodes_the_alternative_the_document_names) {
+    const auto rect = parse_json(R"({"width":3,"height":4})");
+    ASSERT_TRUE(rect.has_value());
+    const Shape as_rect = js::from_json<Shape>(*rect);
+    ASSERT_TRUE(std::holds_alternative<Rectangle>(as_rect));
+    EXPECT_DOUBLE_EQ(std::get<Rectangle>(as_rect).width, 3.0);
+    EXPECT_DOUBLE_EQ(std::get<Rectangle>(as_rect).height, 4.0);
+
+    const auto circle = parse_json(R"({"radius":2.5})");
+    ASSERT_TRUE(circle.has_value());
+    const Shape as_circle = js::from_json<Shape>(*circle);
+    ASSERT_TRUE(std::holds_alternative<Circle>(as_circle));
+    EXPECT_DOUBLE_EQ(std::get<Circle>(as_circle).radius, 2.5);
+}
+
+TEST(JsonSchema, a_variant_round_trips_through_to_json) {
+    // The active alternative is preserved, and no tag field is invented.
+    const json rect{{"width", 1.0}, {"height", 2.0}};
+    const Shape shape = js::from_json<Shape>(rect);
+    EXPECT_EQ(json::parse(js::to_json(shape)), rect);
+}
+
+TEST(JsonSchema, an_ambiguous_variant_document_is_rejected) {
+    // Both alternatives' members are present, so both fit and the document does
+    // not say which it is.
+    const auto both = parse_json(R"({"width":1,"height":2,"radius":3})");
+    ASSERT_TRUE(both.has_value());
+    EXPECT_EQ(bind_error_message([&] { (void)js::from_json<Shape>(*both); }),
+              "variant is ambiguous: 2 alternatives matched (Rectangle, "
+              "Circle)");
+}
+
+TEST(JsonSchema, a_variant_document_matching_no_alternative_is_rejected) {
+    // Every alternative's failure is reported, so the model can correct itself
+    // rather than guess at which one was wrong.
+    const auto none = parse_json(R"({"radius":"thick"})");
+    ASSERT_TRUE(none.has_value());
+    EXPECT_EQ(
+        bind_error_message([&] { (void)js::from_json<Shape>(*none); }),
+        "no variant alternative matched: Rectangle: missing required member: "
+        "width, Circle: radius: expected number");
+}
+
+TEST(JsonSchema, the_consumer_learns_which_alternative_is_active) {
+    // The decoded variant tells its consumer exactly what it holds, using only
+    // std::variant's own facilities. This is sound because of the
+    // exactly-one-match rule: a document fitting zero or several alternatives
+    // throws before any value is handed over, so there is never a variant whose
+    // element type is unclear.
+    const auto rect = parse_json(R"({"width":3,"height":4})");
+    const auto circle = parse_json(R"({"radius":2.5})");
+    ASSERT_TRUE(rect.has_value());
+    ASSERT_TRUE(circle.has_value());
+
+    const Shape as_rect = js::from_json<Shape>(*rect);
+    const Shape as_circle = js::from_json<Shape>(*circle);
+
+    // std::holds_alternative answers "which alternative is in there".
+    EXPECT_TRUE(std::holds_alternative<Rectangle>(as_rect));
+    EXPECT_FALSE(std::holds_alternative<Circle>(as_rect));
+    EXPECT_TRUE(std::holds_alternative<Circle>(as_circle));
+
+    // std::visit dispatches to that alternative's handler, so the consumer
+    // reads the members its actual type has and no others.
+    const auto area = [](const Shape &_shape) {
+        return std::visit(
+            []<typename T>(const T &_s) -> double {
+                if constexpr (std::is_same_v<T, Rectangle>) {
+                    return _s.width * _s.height;
+                } else {
+                    return 3.141592653589793 * _s.radius * _s.radius;
+                }
+            },
+            _shape);
+    };
+    EXPECT_DOUBLE_EQ(area(as_rect), 12.0);
+    EXPECT_DOUBLE_EQ(area(as_circle), 3.141592653589793 * 6.25);
+}
+
+TEST(JsonSchema, a_scalar_union_stays_unambiguous) {
+    // Alternatives of different JSON types never overlap, so this is the case
+    // that needs no tag and can never be ambiguous.
+    using Scalar = std::variant<int, std::string>;
+    EXPECT_EQ(js::from_json<Scalar>(json(7)), Scalar{7});
+    EXPECT_EQ(js::from_json<Scalar>(json("seven")), Scalar{"seven"});
 }

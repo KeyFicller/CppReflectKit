@@ -18,6 +18,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -93,6 +94,10 @@ struct is_sequence<std::array<T, N>> : std::true_type {
     static constexpr bool fixed_size = true;
     static constexpr std::size_t extent = N;
 };
+
+template <typename T> struct is_variant : std::false_type {};
+template <typename... Ts>
+struct is_variant<std::variant<Ts...>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_string_like_v =
@@ -310,9 +315,17 @@ consteval std::string object_schema_impl(std::index_sequence<Is...>) {
            "},\"required\":[" + required + "]}";
 }
 
+/// anyOf over a variant's alternatives. Each alternative contributes the schema
+/// its own type already produces. `anyOf` and not `oneOf`: the exclusive form
+/// is rejected by the tool schemas of both OpenAI and Anthropic, and a Python
+/// `A | B` is an anyOf too.
+template <typename T, std::size_t... Is>
+consteval std::string variant_schema_impl(std::index_sequence<Is...>);
+
 /// JSON Schema for one C++ type. std::optional becomes anyOf[T, null] (matching
 /// Pydantic's Optional), vectors/arrays become arrays, enums become string
-/// enums, and other classes become nested objects.
+/// enums, variants become anyOf over their alternatives, and other classes
+/// become nested objects.
 template <typename T> consteval std::string param_schema() {
     if constexpr (is_optional<T>::value) {
         return "{\"anyOf\":[" + param_schema<typename T::value_type>() +
@@ -328,6 +341,9 @@ template <typename T> consteval std::string param_schema() {
         }
         out += "}";
         return out;
+    } else if constexpr (is_variant<T>::value) {
+        return variant_schema_impl<T>(
+            std::make_index_sequence<std::variant_size_v<T>>());
     } else if constexpr (std::is_enum_v<T>) {
         std::string values;
         for (meta::info e : meta::enumerators_of(^^T)) {
@@ -344,10 +360,22 @@ template <typename T> consteval std::string param_schema() {
         static_assert(
             is_json_scalar_v<T>,
             "param_schema: unsupported type for JSON Schema generation "
-            "(only bool, integers, floats, strings, options, sequences, enums "
-            "and reflected classes are supported)");
+            "(only bool, integers, floats, strings, options, sequences, enums, "
+            "variants and reflected classes are supported)");
         return std::string("{\"type\":\"") + json_type_name(^^T) + "\"}";
     }
+}
+
+template <typename T, std::size_t... Is>
+consteval std::string variant_schema_impl(std::index_sequence<Is...>) {
+    std::string out = "{\"anyOf\":[";
+    ((void)([&] {
+         out += std::string(Is == 0 ? "" : ",");
+         out += param_schema<std::variant_alternative_t<Is, T>>();
+     }()),
+     ...);
+    out += "]}";
+    return out;
 }
 
 // --- function introspection -------------------------------------------------
@@ -582,6 +610,66 @@ T object_from_json(const nlohmann::json &_j, std::index_sequence<Is...>) {
     return out;
 }
 
+// One variant alternative's own from_json is what decides it, so the name has
+// to be declared before the helper that calls it.
+template <typename T> T from_json(const nlohmann::json &_j);
+
+/// The name an alternative reports in a decode error, so a failure can say
+/// which alternatives were tried.
+template <typename T> consteval std::string_view variant_alt_name() {
+    if constexpr (meta::has_identifier(^^T)) {
+        return std::define_static_string(meta::identifier_of(^^T));
+    } else {
+        return std::string_view("(unnamed alternative)");
+    }
+}
+
+/// Tries every alternative against the document and accepts the result only
+/// when exactly one fits. Each attempt is caught, because an alternative that
+/// does not fit is not an error by itself -- the next one may. Neither zero nor
+/// two matches can be resolved by guessing: zero is a document no alternative
+/// describes, and two is a document that does not say which alternative it is,
+/// so picking one would land a plausible-looking wrong value.
+template <typename V, std::size_t... Is>
+V variant_from_json_impl(const nlohmann::json &_j, std::index_sequence<Is...>) {
+    // Optional, not a default-constructed variant: an alternative need not be
+    // default-constructible, and only a match ever builds one.
+    std::optional<V> decoded;
+    std::size_t matched = 0;
+    std::string matched_names;
+    std::string failures;
+    ((void)([&] {
+         using Alt = std::variant_alternative_t<Is, V>;
+         try {
+             Alt value = from_json<Alt>(_j);
+             ++matched;
+             if (!decoded) {
+                 decoded.emplace(std::in_place_type<Alt>, std::move(value));
+             }
+             if (!matched_names.empty()) {
+                 matched_names += ", ";
+             }
+             matched_names += variant_alt_name<Alt>();
+         } catch (const bind_error &e) {
+             if (!failures.empty()) {
+                 failures += ", ";
+             }
+             failures += variant_alt_name<Alt>();
+             failures += ": ";
+             failures += e.what();
+         }
+     }()),
+     ...);
+    if (matched == 1) {
+        return std::move(*decoded);
+    }
+    if (matched == 0) {
+        throw bind_error("no variant alternative matched: " + failures);
+    }
+    throw bind_error("variant is ambiguous: " + std::to_string(matched) +
+                     " alternatives matched (" + matched_names + ")");
+}
+
 /// JSON value -> C++ value, mirroring param_schema()'s type dispatch. Only the
 /// exact JSON type is accepted: "540" is an error, not a coercion into int, and
 /// 540.0 is not an int either. The document comes from a model, so a mistyped
@@ -620,6 +708,9 @@ template <typename T> T from_json(const nlohmann::json &_j) {
             }
             return out;
         }
+    } else if constexpr (is_variant<T>::value) {
+        return variant_from_json_impl<T>(
+            _j, std::make_index_sequence<std::variant_size_v<T>>());
     } else if constexpr (std::is_enum_v<T>) {
         if (!_j.is_string()) {
             throw bind_error("expected string");
@@ -781,6 +872,9 @@ template <typename T> std::string to_json(const T &_value) {
             out += to_json(_value[i]);
         }
         return out + "]";
+    } else if constexpr (is_variant<T>::value) {
+        return std::visit([](const auto &_alt) { return to_json(_alt); },
+                          _value);
     } else if constexpr (std::is_class_v<T>) {
         return object_to_json(_value,
                               std::make_index_sequence<member_count<T>()>());
