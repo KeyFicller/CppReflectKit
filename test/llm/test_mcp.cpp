@@ -80,7 +80,11 @@ TEST(Mcp, server_discover)
 
 TEST(Mcp, tools_list)
 {
-    const json tools = result_of(request("tools/list").dump()).at("tools");
+    const json listed = result_of(request("tools/list").dump());
+    check_eq(listed.at("_meta").at("io.modelcontextprotocol/serverInfo"),
+             json{{"name", "cppreflect"}, {"version", "0.1.0"}},
+             "every result carries serverInfo");
+    const json tools = listed.at("tools");
     ASSERT_EQ(tools.size(), 1u) << "exactly the marked function is registered";
     const json& tool = tools.at(0);
     check_eq(tool.at("name"), "search_documents", "name from identifier_of");
@@ -92,6 +96,12 @@ TEST(Mcp, tools_list)
     check_eq(schema.at("properties").at("query").at("description"), "The raw query text.",
              "parameter description from js::param_docs");
     EXPECT_EQ(schema.at("properties").size(), 3u) << "the signature's three parameters";
+    check_eq(tool.at("annotations"),
+             json{{"readOnlyHint", true},
+                  {"destructiveHint", true},
+                  {"idempotentHint", false},
+                  {"openWorldHint", false}},
+             "hints from the marker; destructive stays at the spec default");
 }
 
 TEST(Mcp, tools_call)
@@ -129,6 +139,8 @@ TEST(Mcp, a_failing_tool_is_a_result_not_a_transport_error)
             .at(0);
     EXPECT_FALSE(reply.contains("error")) << "a failing tool is not a JSON-RPC error";
     check_eq(reply.at("result").at("isError"), true, "missing argument -> isError:true");
+    check_eq(reply.at("result").at("_meta").at("io.modelcontextprotocol/serverInfo").at("name"),
+             "cppreflect", "isError is still a result, so it carries serverInfo");
 }
 
 TEST(Mcp, unknown_tool_is_invalid_params)
@@ -216,6 +228,7 @@ TEST(Mcp, protocol_edges)
 
     const json unknown_method = drive({request("tools/unknown").dump()}).at(0);
     check_eq(unknown_method.at("error").at("code"), -32601, "unknown method -> -32601");
+    EXPECT_FALSE(unknown_method.contains("result")) << "a JSON-RPC error carries no serverInfo";
 
     json mismatched = request("tools/list");
     mismatched["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"] = "2025-06-18";

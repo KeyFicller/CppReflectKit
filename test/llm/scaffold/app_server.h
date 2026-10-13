@@ -168,7 +168,7 @@ inline std::vector<Hit> search_corpus(std::string_view _query, int _limit, bool 
 class CppReflectServer : public mcp::Server<CppReflectServer> {
 public:
     // A tool: the parameters become a JSON Schema, and the call decodes them.
-    [[= mcp::tool{}]]
+    [[= mcp::tool{ .read_only = true, .open_world = false }]]
     [[= js::doc{ .text = js::str("Searches the repository's own documentation.") } ]]
     [[= js::param_docs(js::str("The raw query text."),
                        js::str("Maximum number of hits to return."),

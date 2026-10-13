@@ -26,11 +26,21 @@ namespace mcp {
 /// The protocol revision this server speaks.
 inline constexpr std::string_view kProtocolVersion = "2026-07-28";
 
-/// Marks a member function of the server class as a tool or a prompt. Everything
-/// about the entity -- name, description, parameter descriptors, call -- is
-/// reflected from the function, so the marker is the only registration needed.
-struct tool {};
+/// Marks a member function as a prompt. Name, description, arguments and the
+/// call all come from the function, so the marker is the only registration.
 struct prompt {};
+
+/// Marks a member function as a tool. Name, description, schema and the call
+/// still come from the function. The four fields are `ToolAnnotations`; their
+/// defaults are the spec's, so a bare `tool{}` means "may write, may destroy,
+/// not safe to retry, may reach outside". `destructive` and `idempotent` apply
+/// only when `read_only` is false. They are client hints, not schema fields.
+struct tool {
+    bool read_only = false;
+    bool destructive = true;
+    bool idempotent = false;
+    bool open_world = true;
+};
 
 /// A resource marker, which (unlike tool / prompt) also carries the URI and MIME
 /// type as structural strings: the marker is the only place a real
@@ -89,6 +99,27 @@ template <std::meta::info Fn>
 consteval std::string_view tool_description()
 {
     return std::string_view(std::define_static_string(js::description_of<Fn>()));
+}
+
+/// The tool marker's hints. `js::find_annotation` only matches templates, and
+/// `tool` is a plain type, so this walks annotations itself.
+template <std::meta::info Fn>
+consteval std::meta::info tool_annotation()
+{
+    for (std::meta::info a : std::meta::annotations_of(Fn)) {
+        if (std::meta::remove_const(std::meta::type_of(a)) == ^^tool) {
+            return a;
+        }
+    }
+    return {};
+}
+
+template <std::meta::info Fn>
+consteval tool tool_marker()
+{
+    constexpr std::meta::info anno = tool_annotation<Fn>();
+    static_assert(anno != std::meta::info{}, "mcp tool needs [[= mcp::tool{}]]");
+    return std::meta::extract<tool>(anno);
 }
 
 /// The resource marker's consteval-extracted config object.
@@ -254,6 +285,7 @@ private:
         std::string_view input_schema;                 // bare JSON Schema, as text
         void* self;
         std::string (*run)(void*, const nlohmann::json&);
+        tool hints;                                    // client hints, not schema
     };
     struct Prompt {
         std::string_view name;
@@ -308,7 +340,7 @@ void Server<Derived>::register_member(Self* _self)
     } else if constexpr (has_annotation<M, ^^mcp::tool>()) {
         m_tools.push_back(Tool{std::meta::identifier_of(M), tool_description<M>(),
                                js::function_schema<M, js::Style::JsonSchema>(), _self,
-                               &detail::invoke_member_entry<M, Self>});
+                               &detail::invoke_member_entry<M, Self>, tool_marker<M>()});
     } else if constexpr (has_annotation<M, ^^mcp::prompt>()) {
         m_prompts.push_back(Prompt{std::meta::identifier_of(M), tool_description<M>(),
                                    prompt_arguments<M>(), _self,
@@ -432,33 +464,33 @@ std::string Server<Derived>::dispatch(const std::string& _line)
     }
 
     try {
+        json result;
         if (method == "server/discover") {
-            return detail::ok(id, on_discover()).dump();
+            result = on_discover();
+        } else if (method == "tools/list") {
+            result = on_tools_list();
+        } else if (method == "tools/call") {
+            result = on_tools_call(params);
+        } else if (method == "prompts/list") {
+            result = on_prompts_list();
+        } else if (method == "prompts/get") {
+            result = on_prompts_get(params);
+        } else if (method == "resources/list") {
+            result = on_resources_list();
+        } else if (method == "resources/read") {
+            result = on_resources_read(params);
+        } else {
+            return detail::err(id, -32601, "Method not found: " + method).dump();
         }
-        if (method == "tools/list") {
-            return detail::ok(id, on_tools_list()).dump();
-        }
-        if (method == "tools/call") {
-            return detail::ok(id, on_tools_call(params)).dump();
-        }
-        if (method == "prompts/list") {
-            return detail::ok(id, on_prompts_list()).dump();
-        }
-        if (method == "prompts/get") {
-            return detail::ok(id, on_prompts_get(params)).dump();
-        }
-        if (method == "resources/list") {
-            return detail::ok(id, on_resources_list()).dump();
-        }
-        if (method == "resources/read") {
-            return detail::ok(id, on_resources_read(params)).dump();
-        }
+        // Stateless: every result identifies the server. Errors have no result.
+        result["_meta"]["io.modelcontextprotocol/serverInfo"] = {
+            {"name", std::string(server_name())}, {"version", std::string(server_version())}};
+        return detail::ok(id, std::move(result)).dump();
     } catch (const detail::RpcError& _e) {
         return detail::err(id, _e.code, _e.what(), _e.data).dump();
     } catch (const std::exception& _e) {
         return detail::err(id, -32603, _e.what()).dump();
     }
-    return detail::err(id, -32601, "Method not found: " + method).dump();
 }
 
 template <class Derived>
@@ -479,9 +511,6 @@ nlohmann::json Server<Derived>::on_discover() const
         {"resultType", "complete"},
         {"supportedVersions", json::array({kProtocolVersion})},
         {"capabilities", std::move(capabilities)},
-        {"_meta",
-         {{"io.modelcontextprotocol/serverInfo",
-           {{"name", std::string(server_name())}, {"version", std::string(server_version())}}}}},
         {"instructions", std::string(instructions())},
         {"ttlMs", 3600000},
         {"cacheScope", "public"},
@@ -498,6 +527,11 @@ nlohmann::json Server<Derived>::on_tools_list() const
             {"name", std::string(tool.name)},
             {"description", std::string(tool.description)},
             {"inputSchema", json::parse(std::string(tool.input_schema))},
+            {"annotations",
+             json{{"readOnlyHint", tool.hints.read_only},
+                  {"destructiveHint", tool.hints.destructive},
+                  {"idempotentHint", tool.hints.idempotent},
+                  {"openWorldHint", tool.hints.open_world}}},
         });
     }
     return json{
