@@ -144,31 +144,6 @@ option(CPPREF_WARNINGS "Enable -Wall -Wextra on the test targets" ON)
 option(CPPREF_SANITIZE "Build the test targets with ASan + UBSan" OFF)
 set(CPPREF_IMGUI_ROOT "" CACHE PATH "An existing Dear ImGui checkout to use for ui")
 
-# github.com clones are unreliable on this network, so fetch from the gitee
-# mirrors by default (same tags/commits). Configure with -DCPPREF_DEPS_FROM_GITHUB=ON
-# to use github.com directly.
-option(CPPREF_DEPS_FROM_GITHUB "Fetch dependencies from github.com instead of the gitee mirrors" OFF)
-if(CPPREF_DEPS_FROM_GITHUB)
-  set(CPPREF_YAML_CPP_URL "https://github.com/jbeder/yaml-cpp.git" CACHE STRING "")
-  set(CPPREF_GLFW_URL "https://github.com/glfw/glfw.git" CACHE STRING "")
-  set(CPPREF_IMGUI_URL "https://github.com/ocornut/imgui.git" CACHE STRING "")
-  set(CPPREF_NLOHMANN_JSON_URL "https://github.com/nlohmann/json.git" CACHE STRING "")
-  set(CPPREF_GOOGLETEST_URL "https://github.com/google/googletest.git" CACHE STRING "")
-  # cpp-httplib has no gitee mirror; both dep modes fetch it from github.
-  set(CPPREF_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib.git" CACHE STRING "")
-  # cppcodec has no gitee mirror either.
-  set(CPPREF_CPPCODEC_URL "https://github.com/tplgy/cppcodec.git" CACHE STRING "")
-else()
-  set(CPPREF_YAML_CPP_URL "https://gitee.com/mirrors/yaml-cpp.git" CACHE STRING "")
-  set(CPPREF_GLFW_URL "https://gitee.com/mirrors/glfw.git" CACHE STRING "")
-  set(CPPREF_IMGUI_URL "https://gitee.com/mirrors/imgui.git" CACHE STRING "")
-  set(CPPREF_NLOHMANN_JSON_URL "https://gitee.com/mirrors/nlohmann-json.git" CACHE STRING "")
-  set(CPPREF_GOOGLETEST_URL "https://gitee.com/mirrors/googletest.git" CACHE STRING "")
-  set(CPPREF_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib.git" CACHE STRING "")
-  # cppcodec: no gitee mirror, so this branch uses github too.
-  set(CPPREF_CPPCODEC_URL "https://github.com/tplgy/cppcodec.git" CACHE STRING "")
-endif()
-
 include(FetchContent)
 
 # yaml-cpp 0.8.0 declares a pre-3.5 cmake_minimum_required, which CMake 4 aborts on.
@@ -228,7 +203,7 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
       set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
       FetchContent_Declare(
         nlohmann_json
-        GIT_REPOSITORY "${CPPREF_NLOHMANN_JSON_URL}"
+        GIT_REPOSITORY "https://github.com/nlohmann/json.git"
         GIT_TAG v3.12.0
         GIT_SHALLOW TRUE
       )
@@ -251,7 +226,7 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
     set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(
       cpp_httplib
-      GIT_REPOSITORY "${CPPREF_HTTPLIB_URL}"
+      GIT_REPOSITORY "https://github.com/yhirose/cpp-httplib.git"
       GIT_TAG v0.60.1
       GIT_SHALLOW TRUE
     )
@@ -266,7 +241,7 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
   if(NOT TARGET cppcodec::cppcodec)
     FetchContent_Declare(
       cppcodec
-      GIT_REPOSITORY "${CPPREF_CPPCODEC_URL}"
+      GIT_REPOSITORY "https://github.com/tplgy/cppcodec.git"
       GIT_TAG v0.2
       GIT_SHALLOW TRUE
       SOURCE_SUBDIR "cppcodec"
@@ -308,11 +283,11 @@ if(CPPREF_WITH_UI OR CPPREF_BUILD_TESTS)
     # Dear ImGui (docking branch): sources only, the repo has no CMakeLists.
     # Pinned to a commit, not the moving `docking` branch, so the build is
     # reproducible; a pin also means no GIT_SHALLOW, which cannot fetch an
-    # arbitrary commit from every mirror.
+    # arbitrary commit.
     set(CPPREF_IMGUI_TAG "7e1b65d26d52e9dd199d889c148c72184de647b4" CACHE STRING "Dear ImGui commit")
     FetchContent_Declare(
       imgui
-      GIT_REPOSITORY "${CPPREF_IMGUI_URL}"
+      GIT_REPOSITORY "https://github.com/ocornut/imgui.git"
       GIT_TAG "${CPPREF_IMGUI_TAG}"
     )
     FetchContent_MakeAvailable(imgui)
@@ -356,7 +331,7 @@ if(CPPREF_BUILD_TESTS)
   set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
     yaml-cpp
-    GIT_REPOSITORY "${CPPREF_YAML_CPP_URL}"
+    GIT_REPOSITORY "https://github.com/jbeder/yaml-cpp.git"
     GIT_TAG 0.8.0
   )
   FetchContent_MakeAvailable(yaml-cpp)
@@ -366,7 +341,7 @@ if(CPPREF_BUILD_TESTS)
   set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(
     glfw
-    GIT_REPOSITORY "${CPPREF_GLFW_URL}"
+    GIT_REPOSITORY "https://github.com/glfw/glfw.git"
     GIT_TAG 3.4
   )
   FetchContent_MakeAvailable(glfw)
@@ -379,7 +354,7 @@ if(CPPREF_BUILD_TESTS)
   set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
   FetchContent_Declare(
     googletest
-    GIT_REPOSITORY "${CPPREF_GOOGLETEST_URL}"
+    GIT_REPOSITORY "https://github.com/google/googletest.git"
     GIT_TAG v1.15.2
     GIT_SHALLOW TRUE
   )
