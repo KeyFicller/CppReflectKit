@@ -210,11 +210,25 @@ struct text {
     std::string value;
 };
 
-/// One image block. `bytes` are raw; the server base64-encodes them.
+/// One image block. `bytes` are raw; the server base64-encodes them. The MIME
+/// type is a plain string, not an enum: MIME is an open set, and real subtype
+/// names carry `-`, `_` and `+` (`image/x-icon`, `image/svg+xml`) that no
+/// enumerator identifier can spell.
 struct image {
     std::string mime_type;
     std::vector<std::uint8_t> bytes;
 };
+
+/// The picture formats a vision model usually takes, as constants rather than
+/// enumerators, so any other MIME string still works. `const char *` and not
+/// `std::string_view` because std::string's conversion from a string_view is
+/// explicit, and `mcp::image{ mcp::mime::png, bytes }` has to convert.
+namespace mime {
+inline constexpr const char *png = "image/png";
+inline constexpr const char *jpeg = "image/jpeg";
+inline constexpr const char *gif = "image/gif";
+inline constexpr const char *webp = "image/webp";
+} // namespace mime
 
 /// An ordered list of text and image blocks. A tool returns this or
 /// `std::string`.
@@ -224,21 +238,51 @@ struct content {
     void add(image _block) { blocks.push_back(std::move(_block)); }
 };
 
+/// Who a prompt message is from. MCP's Role has exactly these two values, and
+/// the enumerator names *are* the wire strings -- `js::enum_to_string` reflects
+/// them, so there is no mapping table to drift.
+enum class role { user, assistant };
+
+/// One prompt message: a role and a single block. Mirrors MCP's PromptMessage,
+/// whose `content` is one block rather than a list, so several blocks are
+/// several messages.
+struct message {
+    role role;
+    std::variant<text, image> block;
+};
+
+/// The binary payload of a resource. The MIME type is not repeated here: it is
+/// written in the resource marker and advertised by `resources/list`.
+struct blob {
+    std::vector<std::uint8_t> bytes;
+};
+
 namespace detail {
 
-/// Per-entity trampoline. A pointer-to-member cannot be formed from a runtime
-/// reflection, but it can from a template instantiation, so the registry stores
-/// `&invoke_member_entry<Fn, Self>` plus the object. A body must return
-/// std::string.
-template <std::meta::info Fn, typename Self>
-std::string invoke_member_entry(void *_self, const nlohmann::json &_args) {
-    static_assert(
-        std::is_same_v<
-            std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
-                *static_cast<Self *>(_self), _args))>,
-            std::string>,
-        "mcp body must return std::string");
-    return js::invoke_member_with_json<Fn>(*static_cast<Self *>(_self), _args);
+/// Base64, RFC 4648. One helper, so a block emitted from a tool and the same
+/// bytes emitted from a prompt or a resource carry identical text.
+inline std::string base64_of(const std::vector<std::uint8_t> &_bytes) {
+    return cppcodec::base64_rfc4648::encode<std::string>(_bytes.data(),
+                                                         _bytes.size());
+}
+
+/// One block as wire JSON. A tool result's `content` array and a prompt
+/// message's `content` are the same shape, so they share this.
+inline nlohmann::json encode_block(const std::variant<text, image> &_block) {
+    using nlohmann::json;
+    if (const auto *written = std::get_if<text>(&_block)) {
+        return json{{"type", "text"}, {"text", written->value}};
+    }
+    const auto &picture = std::get<image>(_block);
+    return json{{"type", "image"},
+                {"data", base64_of(picture.bytes)},
+                {"mimeType", picture.mime_type}};
+}
+
+/// One prompt message as wire JSON.
+inline nlohmann::json encode_message(const message &_message) {
+    return nlohmann::json{{"role", js::enum_to_string(_message.role)},
+                          {"content", encode_block(_message.block)}};
 }
 
 /// A JSON-RPC level failure (as opposed to a tool that ran and failed, which is
@@ -287,19 +331,11 @@ inline tool_body content_body(content _content) {
     using nlohmann::json;
     json blocks = json::array();
     std::string cli;
-    for (auto &block : _content.blocks) {
-        if (auto *written = std::get_if<text>(&block)) {
+    for (const auto &block : _content.blocks) {
+        if (const auto *written = std::get_if<text>(&block)) {
             cli += written->value;
-            blocks.push_back(
-                json{{"type", "text"}, {"text", std::move(written->value)}});
-        } else {
-            auto &picture = std::get<image>(block);
-            blocks.push_back(
-                json{{"type", "image"},
-                     {"data", cppcodec::base64_rfc4648::encode<std::string>(
-                                  picture.bytes.data(), picture.bytes.size())},
-                     {"mimeType", std::move(picture.mime_type)}});
         }
+        blocks.push_back(encode_block(block));
     }
     return tool_body{json{{"resultType", "complete"},
                           {"content", std::move(blocks)},
@@ -310,6 +346,11 @@ inline tool_body content_body(content _content) {
 /// Tool trampoline. A `std::string` body is one text block and `--call` prints
 /// that string. A `content` body is its blocks, and `--call` prints only the
 /// text values, concatenated.
+///
+/// A pointer-to-member cannot be formed from a runtime reflection, but it can
+/// from a template instantiation, so the registry stores
+/// `&invoke_tool_entry<Fn, Self>` plus the object and calls it through the
+/// `void *`.
 template <std::meta::info Fn, typename Self>
 tool_body invoke_tool_entry(void *_self, const nlohmann::json &_args) {
     using R = std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
@@ -323,6 +364,54 @@ tool_body invoke_tool_entry(void *_self, const nlohmann::json &_args) {
     } else {
         return content_body(js::invoke_member_with_json<Fn>(
             *static_cast<Self *>(_self), _args));
+    }
+}
+
+/// Prompt trampoline, returning the `messages` array. A `std::string` body is
+/// that array verbatim (the escape hatch), a `message` body is one message, and
+/// a vector body is those messages in order.
+template <std::meta::info Fn, typename Self>
+nlohmann::json invoke_prompt_entry(void *_self, const nlohmann::json &_args) {
+    using nlohmann::json;
+    using R = std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
+        *static_cast<Self *>(_self), _args))>;
+    static_assert(std::is_same_v<R, std::string> || std::is_same_v<R, message> ||
+                      std::is_same_v<R, std::vector<message>>,
+                  "mcp prompt must return std::string, mcp::message or "
+                  "std::vector<mcp::message>");
+    if constexpr (std::is_same_v<R, std::string>) {
+        // Throw rather than swallow: the caller maps a parse failure to -32603.
+        return json::parse(js::invoke_member_with_json<Fn>(
+            *static_cast<Self *>(_self), _args));
+    } else if constexpr (std::is_same_v<R, message>) {
+        return json::array({encode_message(js::invoke_member_with_json<Fn>(
+            *static_cast<Self *>(_self), _args))});
+    } else {
+        json messages = json::array();
+        for (const message &one : js::invoke_member_with_json<Fn>(
+                 *static_cast<Self *>(_self), _args)) {
+            messages.push_back(encode_message(one));
+        }
+        return messages;
+    }
+}
+
+/// Resource trampoline, returning the contents *entry payload* -- the `text` or
+/// `blob` key only, because `uri` and `mimeType` are fields of the registry
+/// record and the caller merges them in.
+template <std::meta::info Fn, typename Self>
+nlohmann::json invoke_resource_entry(void *_self, const nlohmann::json &_args) {
+    using R = std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
+        *static_cast<Self *>(_self), _args))>;
+    static_assert(std::is_same_v<R, std::string> || std::is_same_v<R, blob>,
+                  "mcp resource must return std::string or mcp::blob");
+    if constexpr (std::is_same_v<R, std::string>) {
+        return nlohmann::json{{"text", js::invoke_member_with_json<Fn>(
+                                           *static_cast<Self *>(_self), _args)}};
+    } else {
+        const blob payload =
+            js::invoke_member_with_json<Fn>(*static_cast<Self *>(_self), _args);
+        return nlohmann::json{{"blob", base64_of(payload.bytes)}};
     }
 }
 
@@ -391,7 +480,7 @@ private:
         std::string_view description;
         std::string_view arguments; // JSON array of PromptArgument
         void *self;
-        std::string (*run)(void *, const nlohmann::json &);
+        nlohmann::json (*run)(void *, const nlohmann::json &);
     };
     struct Resource {
         std::string_view uri;
@@ -399,7 +488,7 @@ private:
         std::string_view name;
         std::string_view description;
         void *self;
-        std::string (*run)(void *, const nlohmann::json &);
+        nlohmann::json (*run)(void *, const nlohmann::json &);
     };
 
     template <std::meta::info M, typename Self>
@@ -450,12 +539,12 @@ void Server<Derived>::register_member(Self *_self) {
         m_prompts.push_back(Prompt{std::meta::identifier_of(M),
                                    tool_description<M>(), prompt_arguments<M>(),
                                    _self,
-                                   &detail::invoke_member_entry<M, Self>});
+                                   &detail::invoke_prompt_entry<M, Self>});
     } else if constexpr (has_annotation<M, ^^mcp::resource>()) {
         m_resources.push_back(Resource{resource_uri<M>(), resource_mime<M>(),
                                        std::meta::identifier_of(M),
                                        tool_description<M>(), _self,
-                                       &detail::invoke_member_entry<M, Self>});
+                                       &detail::invoke_resource_entry<M, Self>});
     }
 }
 
@@ -737,9 +826,11 @@ Server<Derived>::on_prompts_get(const nlohmann::json &_params) const {
         }
         json messages;
         try {
-            // The body is the messages JSON; a failure to fill a required
-            // argument is a client error (-32602), not an internal one.
-            messages = json::parse(prompt.run(prompt.self, args));
+            // The trampoline hands back the `messages` array: either parsed from
+            // the string a body returns, or built from typed messages. A failure
+            // to fill a required argument is a client error (-32602), not an
+            // internal one.
+            messages = prompt.run(prompt.self, args);
         } catch (const json::exception &) {
             throw detail::RpcError(-32603,
                                    "prompt produced invalid messages JSON");
@@ -784,18 +875,19 @@ Server<Derived>::on_resources_read(const nlohmann::json &_params) const {
         if (resource.uri != uri) {
             continue;
         }
-        std::string text;
+        json entry;
         try {
-            text = resource.run(resource.self, json::object());
+            // The trampoline returns the payload only -- `text` or `blob` --
+            // because uri and mimeType are fields of the record.
+            entry = resource.run(resource.self, json::object());
         } catch (const std::exception &_e) {
             throw detail::RpcError(-32603, _e.what());
         }
+        entry["uri"] = std::string(resource.uri);
+        entry["mimeType"] = std::string(resource.mime_type);
         return json{
             {"resultType", "complete"},
-            {"contents",
-             json::array({json{{"uri", std::string(resource.uri)},
-                               {"mimeType", std::string(resource.mime_type)},
-                               {"text", std::move(text)}}})},
+            {"contents", json::array({std::move(entry)})},
             {"ttlMs", 300000},
             {"cacheScope", "public"},
         };

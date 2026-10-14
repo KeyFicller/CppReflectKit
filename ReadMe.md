@@ -10,14 +10,153 @@ from the declaration:
 
 | Library | Header | Derives |
 |---|---|---|
-| Undo | `lib/inc/undo/reflection_undo.h` | field capture / restore for `MEMBER()`-declared fields |
-| UI | `lib/inc/ui/reflection_widgets.h` | one ImGui widget per reflected field type |
 | JSON | `lib/inc/llm/reflection_json.h` | JSON Schema, OpenAI tool wrappers, and the reverse decoder |
 | MCP | `lib/inc/llm/reflection_mcp.h` | tools / prompts / resources from marked member functions |
+| Undo | `lib/inc/undo/reflection_undo.h` | field capture / restore for `MEMBER()`-declared fields |
+| UI | `lib/inc/ui/reflection_widgets.h` | one ImGui widget per reflected field type |
 
 Each library has a design note beside it in `docs/`.
 
 ## Libraries
+
+### `js::` — JSON schema and decoding (`reflection_json.h`)
+
+Compile-time projection of C++ types and functions to JSON, plus the reverse
+decoder. No schema is hand-written.
+
+**What you already have:** a struct, a function, and both schemas written out by
+hand:
+
+```cpp
+struct Point { int x; int y; };
+std::string greet(std::string name);
+
+// ...the same two shapes again as JSON, kept in sync by hand
+const char* kPointSchema = R"({"type":"object","properties":{ ... },"required":["x","y"]})";
+const char* kGreetTool    = R"({"type":"function","function":{ ... }})";
+```
+
+**What you add:** a description on the declaration, once — on the type, its
+fields, and a function's parameters:
+
+```cpp
+struct Point {
+    [[= js::desc{ .text = js::str("Horizontal offset.") } ]] int x;
+    [[= js::desc{ .text = js::str("Vertical offset.") } ]] int y;
+};
+
+[[= js::doc{ .text = js::str("Greets someone.") } ]]
+[[= js::param_docs(js::str("Who to greet.")) ]]        // parameter descriptions, by position
+std::string greet(std::string name);
+
+constexpr auto object_schema = js::tool_schema<Point>();                            // object
+constexpr auto tool          = js::function_schema<^^greet, js::Style::OpenAiTool>(); // tool
+```
+
+**What you get:** both shapes, generated at compile time:
+
+```json
+// js::tool_schema<Point>()
+{ "type": "object",
+  "properties": { "x": { "type": "integer", "description": "Horizontal offset." },
+                  "y": { "type": "integer", "description": "Vertical offset." } },
+  "required": ["x", "y"] }
+
+// js::function_schema<^^greet, js::Style::OpenAiTool>()
+{ "type": "function",
+  "function": { "name": "greet",
+                "description": "Greets someone.",
+                "parameters": { "type": "object",
+                                "properties": { "name": { "type": "string",
+                                                          "description": "Who to greet." } },
+                                "required": ["name"] } } }
+```
+
+### `mcp::` — MCP server (`reflection_mcp.h`)
+
+A CRTP base whose constructor *scans* the derived class: a marked **non-static
+member function** becomes a tool, prompt or resource, with no registration line.
+It owns the JSON-RPC 2.0 loop and the three tables, and speaks protocol revision
+`mcp::kProtocolVersion` (`"2026-07-28"`).
+
+**What you already have:** the functions, and a hand-written table entry,
+descriptor and unpacking lambda per tool, prompt and resource:
+
+```cpp
+std::string greet(std::string name);
+std::string explain(std::string topic);
+
+server.add_tool("greet", R"({"description":"Greets someone.","inputSchema":{ ... }})",
+                [](const json& a) { return greet(a["name"]); });
+server.add_prompt("explain", R"({"arguments":[ ... ]})", /* ... */);
+server.add_resource("file:///docs/notes.md", "text/markdown", /* ... */);
+```
+
+**What you add:** a marker and its doc on each function:
+
+```cpp
+class MyServer : public mcp::Server<MyServer> {
+    [[= mcp::tool{}]]
+    [[= js::doc{ .text = js::str("Greets someone.") } ]]
+    [[= js::param_docs(js::str("Who to greet.")) ]]
+    std::string greet(std::string name);
+
+    [[= mcp::prompt{}]]
+    [[= js::doc{ .text = js::str("Explain a concept.") } ]]
+    [[= js::param_docs(js::str("The concept to explain.")) ]]
+    std::string explain(std::string topic);
+
+    [[= mcp::resource{ .uri = js::str("file:///docs/notes.md"),
+                       .mime_type = js::str("text/markdown") }]]
+    [[= js::doc{ .text = js::str("Design notes.") } ]]
+    std::string design_notes();
+};
+```
+
+**What you get:** `tools/list`, `prompts/list` and `resources/list` serve these —
+name, schema, `required` and the call all derived from the signatures:
+
+```json
+// tools/list
+{ "name": "greet", "description": "Greets someone.",
+  "inputSchema": { "type": "object",
+                   "properties": { "name": { "type": "string",
+                                             "description": "Who to greet." } },
+                   "required": ["name"] } }
+
+// prompts/list
+{ "name": "explain", "description": "Explain a concept.",
+  "arguments": [ { "name": "topic", "description": "The concept to explain.",
+                   "required": true } ] }
+
+// resources/list
+{ "uri": "file:///docs/notes.md", "name": "design_notes",
+  "description": "Design notes.", "mimeType": "text/markdown" }
+```
+
+**Return values:** the declared return type picks the wire shape, and a plain
+`std::string` body stays valid on all three paths:
+
+| Path | Body returns | Wire |
+|---|---|---|
+| tool | `std::string` \| `mcp::content` | `content` blocks |
+| prompt | `std::string` \| `mcp::message` \| `std::vector<mcp::message>` | `messages` |
+| resource | `std::string` \| `mcp::blob` | `contents` — `text` or `blob` |
+
+`mcp::text` and `mcp::image` are the blocks tools and prompts share, so a
+rendered frame leaves as an image block instead of a path:
+
+```cpp
+[[= mcp::tool{}]] mcp::content preview() {
+    mcp::content out;
+    out.add(mcp::text{ "compiled" });
+    out.add(mcp::image{ mcp::mime::png, render() });   // base64-encoded for you
+    return out;
+}
+```
+
+A resource's MIME type comes from its marker, so `mcp::blob` is only the bytes;
+a prompt's `mcp::message` is one block, matching MCP's `PromptMessage`.
 
 ### `undo::` — undo/redo (`reflection_undo.h`)
 
@@ -149,121 +288,6 @@ template <> struct Control<Vec2> {                   // a leaf, not a nested gro
 }
 ```
 
-### `js::` — JSON schema and decoding (`reflection_json.h`)
-
-Compile-time projection of C++ types and functions to JSON, plus the reverse
-decoder. No schema is hand-written.
-
-**What you already have:** a struct, a function, and both schemas written out by
-hand:
-
-```cpp
-struct Point { int x; int y; };
-std::string greet(std::string name);
-
-// ...the same two shapes again as JSON, kept in sync by hand
-const char* kPointSchema = R"({"type":"object","properties":{ ... },"required":["x","y"]})";
-const char* kGreetTool    = R"({"type":"function","function":{ ... }})";
-```
-
-**What you add:** a description on the declaration, once — on the type, its
-fields, and a function's parameters:
-
-```cpp
-struct Point {
-    [[= js::desc{ .text = js::str("Horizontal offset.") } ]] int x;
-    [[= js::desc{ .text = js::str("Vertical offset.") } ]] int y;
-};
-
-[[= js::doc{ .text = js::str("Greets someone.") } ]]
-[[= js::param_docs(js::str("Who to greet.")) ]]        // parameter descriptions, by position
-std::string greet(std::string name);
-
-constexpr auto object_schema = js::tool_schema<Point>();                            // object
-constexpr auto tool          = js::function_schema<^^greet, js::Style::OpenAiTool>(); // tool
-```
-
-**What you get:** both shapes, generated at compile time:
-
-```json
-// js::tool_schema<Point>()
-{ "type": "object",
-  "properties": { "x": { "type": "integer", "description": "Horizontal offset." },
-                  "y": { "type": "integer", "description": "Vertical offset." } },
-  "required": ["x", "y"] }
-
-// js::function_schema<^^greet, js::Style::OpenAiTool>()
-{ "type": "function",
-  "function": { "name": "greet",
-                "description": "Greets someone.",
-                "parameters": { "type": "object",
-                                "properties": { "name": { "type": "string",
-                                                          "description": "Who to greet." } },
-                                "required": ["name"] } } }
-```
-
-### `mcp::` — MCP server (`reflection_mcp.h`)
-
-A CRTP base whose constructor *scans* the derived class: a marked **non-static
-member function** becomes a tool, prompt or resource, with no registration line.
-It owns the JSON-RPC 2.0 loop and the three tables, and speaks protocol revision
-`mcp::kProtocolVersion` (`"2026-07-28"`).
-
-**What you already have:** the functions, and a hand-written table entry,
-descriptor and unpacking lambda per tool, prompt and resource:
-
-```cpp
-std::string greet(std::string name);
-std::string explain(std::string topic);
-
-server.add_tool("greet", R"({"description":"Greets someone.","inputSchema":{ ... }})",
-                [](const json& a) { return greet(a["name"]); });
-server.add_prompt("explain", R"({"arguments":[ ... ]})", /* ... */);
-server.add_resource("file:///docs/notes.md", "text/markdown", /* ... */);
-```
-
-**What you add:** a marker and its doc on each function:
-
-```cpp
-class MyServer : public mcp::Server<MyServer> {
-    [[= mcp::tool{}]]
-    [[= js::doc{ .text = js::str("Greets someone.") } ]]
-    [[= js::param_docs(js::str("Who to greet.")) ]]
-    std::string greet(std::string name);
-
-    [[= mcp::prompt{}]]
-    [[= js::doc{ .text = js::str("Explain a concept.") } ]]
-    [[= js::param_docs(js::str("The concept to explain.")) ]]
-    std::string explain(std::string topic);
-
-    [[= mcp::resource{ .uri = js::str("file:///docs/notes.md"),
-                       .mime_type = js::str("text/markdown") }]]
-    [[= js::doc{ .text = js::str("Design notes.") } ]]
-    std::string design_notes();
-};
-```
-
-**What you get:** `tools/list`, `prompts/list` and `resources/list` serve these —
-name, schema, `required` and the call all derived from the signatures:
-
-```json
-// tools/list
-{ "name": "greet", "description": "Greets someone.",
-  "inputSchema": { "type": "object",
-                   "properties": { "name": { "type": "string",
-                                             "description": "Who to greet." } },
-                   "required": ["name"] } }
-
-// prompts/list
-{ "name": "explain", "description": "Explain a concept.",
-  "arguments": [ { "name": "topic", "description": "The concept to explain.",
-                   "required": true } ] }
-
-// resources/list
-{ "uri": "file:///docs/notes.md", "name": "design_notes",
-  "description": "Design notes.", "mimeType": "text/markdown" }
-```
-
 ## Build
 
 - Build a full `clang-p2996` install and point the build at it — the prefix must
@@ -300,13 +324,15 @@ target_link_libraries(app PRIVATE cppreflect::json)   # also brings nlohmann/jso
 | `cppreflect::undo` | — |
 | `cppreflect::ui` | Dear ImGui |
 | `cppreflect::json` | nlohmann/json |
-| `cppreflect::mcp` | `cppreflect::json` |
+| `cppreflect::mcp` | `cppreflect::json`, cpp-httplib, cppcodec |
 
 Each target carries `lib/inc`, `-freflection-latest`, C++26 and the compiler's
 SDK / libc++ paths, so nothing is configured twice; the consumer only has to
 build with `clang-p2996` itself. `nlohmann/json` and Dear ImGui are taken from
-`find_package` first and fetched only when missing, and an import builds none of
-this project's tests. A slimmer import turns the optional halves off:
+`find_package` first and fetched only when missing; `cpp-httplib` and `cppcodec`,
+which only `mcp` needs, have no `find_package` path and are fetched. An import
+builds none of this project's tests. A slimmer import turns the optional halves
+off:
 
 ```sh
 cmake -DCPPREF_WITH_UI=OFF -DCPPREF_WITH_LLM=OFF ...   # then only cppreflect::undo exists
@@ -316,10 +342,10 @@ cmake -DCPPREF_WITH_UI=OFF -DCPPREF_WITH_LLM=OFF ...   # then only cppreflect::u
 
 ## Design notes
 
-- [`docs/about_undo.md`](docs/about_undo.md) — the member/index codec, commands and transactions.
-- [`docs/about_ui.md`](docs/about_ui.md) — the widget walk, control annotations and overrides.
 - [`docs/about_llm.md`](docs/about_llm.md) — JSON schema, MCP tools/prompts/resources, and the LLM bridge.
 - [`docs/about_dispatch.md`](docs/about_dispatch.md) — calling a function by parameter name, for tool calls and widget controls alike.
+- [`docs/about_undo.md`](docs/about_undo.md) — the member/index codec, commands and transactions.
+- [`docs/about_ui.md`](docs/about_ui.md) — the widget walk, control annotations and overrides.
 
 ## License
 

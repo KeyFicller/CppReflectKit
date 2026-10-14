@@ -15,7 +15,7 @@ cmake_minimum_required(VERSION 3.20)
 #   cppreflect::undo   field capture / restore        (no external dependency)
 #   cppreflect::ui     ImGui widgets                  (Dear ImGui)
 #   cppreflect::json   JSON Schema + decoder          (nlohmann/json)
-#   cppreflect::mcp    MCP server                     (cppreflect::json)
+#   cppreflect::mcp    MCP server                     (cppreflect::json, cpp-httplib, cppcodec)
 #   cppreflect::common the compile environment they all share
 # ---------------------------------------------------------------------------
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

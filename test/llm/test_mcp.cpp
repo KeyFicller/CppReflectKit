@@ -750,3 +750,157 @@ TEST(McpContent, handshake_era_keeps_the_image_and_drops_result_type) {
     EXPECT_EQ(result.at("content").at(1).at("data"), "aGk=");
     EXPECT_EQ(result.at("isError"), false);
 }
+
+namespace {
+
+/// Prompts and resources returning more than `std::string`. Its own server, so
+/// the scaffold's counts asserted above and in test_contract.py stay put.
+class RichServer : public mcp::Server<RichServer> {
+public:
+    std::string_view server_name() const override { return "rich"; }
+    std::string_view server_version() const override { return "0"; }
+
+    [[= mcp::prompt{}]] mcp::message one(std::string topic) {
+        return {mcp::role::user, mcp::text{"Explain " + topic}};
+    }
+    [[= mcp::prompt{}]] std::vector<mcp::message> many(std::string topic) {
+        return {{mcp::role::user, mcp::text{"Explain " + topic}},
+                {mcp::role::assistant, mcp::image{mcp::mime::png, {0x68, 0x69}}}};
+    }
+    [[= mcp::prompt{}]] std::string verbatim() {
+        return R"([{"role":"assistant","content":{"type":"text","text":"as-is"}}])";
+    }
+    [[= mcp::prompt{}]] std::string malformed() { return "not json"; }
+    [[= mcp::prompt{}]] mcp::message boom() {
+        throw std::runtime_error("nope");
+    }
+
+    [[= mcp::resource{.uri = js::str("file:///shot.png"),
+                      .mime_type = js::str("image/png")}]] mcp::blob shot() {
+        return {{0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a}};
+    }
+    [[= mcp::resource{.uri = js::str("file:///notes.txt"),
+                      .mime_type = js::str("text/plain")}]] std::string
+    notes() {
+        return "plain text";
+    }
+};
+
+/// The reply line for one request through a real serve() loop.
+template <class S> json served(S &_server, const json &_request) {
+    std::istringstream in{_request.dump() + "\n"};
+    std::ostringstream out;
+    _server.serve(in, out);
+    return json::parse(out.str());
+}
+
+} // namespace
+
+TEST(McpRich, a_message_body_is_one_message) {
+    RichServer server;
+    const json result =
+        served(server, request("prompts/get",
+                               {{"name", "one"},
+                                {"arguments", {{"topic", "P2996"}}}}))
+            .at("result");
+    ASSERT_EQ(result.at("messages").size(), 1u);
+    EXPECT_EQ(result.at("messages").at(0),
+              json({{"role", "user"},
+                    {"content",
+                     {{"type", "text"}, {"text", "Explain P2996"}}}}));
+}
+
+TEST(McpRich, a_vector_body_carries_text_and_image) {
+    RichServer server;
+    const json messages =
+        served(server, request("prompts/get",
+                               {{"name", "many"}, {"arguments", {{"topic", "T"}}}}))
+            .at("result")
+            .at("messages");
+    ASSERT_EQ(messages.size(), 2u);
+    EXPECT_EQ(messages.at(0),
+              json({{"role", "user"},
+                    {"content", {{"type", "text"}, {"text", "Explain T"}}}}));
+    EXPECT_EQ(messages.at(1),
+              json({{"role", "assistant"},
+                    {"content",
+                     {{"type", "image"},
+                      {"data", "aGk="},
+                      {"mimeType", "image/png"}}}}));
+}
+
+TEST(McpRich, the_string_form_is_still_verbatim) {
+    RichServer server;
+    const json messages =
+        served(server, request("prompts/get", {{"name", "verbatim"}}))
+            .at("result")
+            .at("messages");
+    EXPECT_EQ(messages,
+              json::parse(R"([{"role":"assistant",)"
+                          R"("content":{"type":"text","text":"as-is"}}])"));
+}
+
+TEST(McpRich, prompt_error_codes_are_unchanged) {
+    RichServer server;
+    // Unparsable messages JSON is internal (-32603) ...
+    EXPECT_EQ(served(server, request("prompts/get", {{"name", "malformed"}}))
+                  .at("error")
+                  .at("code"),
+              -32603);
+    // ... and a throwing body is the author signalling a bad argument (-32602).
+    EXPECT_EQ(served(server, request("prompts/get", {{"name", "boom"}}))
+                  .at("error")
+                  .at("code"),
+              -32602);
+}
+
+TEST(McpRich, a_blob_has_no_text_key) {
+    RichServer server;
+    const json contents =
+        served(server,
+               request("resources/read", {{"uri", "file:///shot.png"}}))
+            .at("result")
+            .at("contents");
+    ASSERT_EQ(contents.size(), 1u);
+    EXPECT_EQ(contents.at(0).at("uri"), "file:///shot.png");
+    EXPECT_EQ(contents.at(0).at("mimeType"), "image/png");
+    // The bytes are the PNG magic plus two, one of them a NUL: base64 survives
+    // a payload that could not have gone out as `text`.
+    EXPECT_EQ(contents.at(0).at("blob"), "iVBORwAK");
+    EXPECT_FALSE(contents.at(0).contains("text"));
+}
+
+TEST(McpRich, a_string_resource_is_still_text) {
+    RichServer server;
+    const json entry =
+        served(server,
+               request("resources/read", {{"uri", "file:///notes.txt"}}))
+            .at("result")
+            .at("contents")
+            .at(0);
+    EXPECT_EQ(entry, json({{"uri", "file:///notes.txt"},
+                           {"mimeType", "text/plain"},
+                           {"text", "plain text"}}));
+    EXPECT_FALSE(entry.contains("blob"));
+}
+
+TEST(McpRich, listing_and_read_agree_on_a_binary_mime) {
+    RichServer server;
+    json shot;
+    for (const json &entry :
+         served(server, request("resources/list")).at("result").at("resources")) {
+        if (entry.at("uri") == "file:///shot.png") {
+            shot = entry;
+        }
+    }
+    ASSERT_FALSE(shot.is_null()) << "the binary resource is listed";
+    EXPECT_EQ(shot.at("name"), "shot");
+    EXPECT_EQ(shot.at("mimeType"), "image/png");
+    EXPECT_EQ(served(server,
+                     request("resources/read", {{"uri", "file:///shot.png"}}))
+                  .at("result")
+                  .at("contents")
+                  .at(0)
+                  .at("mimeType"),
+              shot.at("mimeType"));
+}

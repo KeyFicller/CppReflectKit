@@ -53,7 +53,7 @@ void Server<Derived>::register_member(Self* _self)
     } else if constexpr (has_annotation<M, ^^mcp::tool>()) {
         m_tools.push_back(Tool{std::meta::identifier_of(M), tool_description<M>(),
                                js::function_schema<M, js::Style::JsonSchema>(), _self,
-                               &detail::invoke_member_entry<M, Self>});
+                               &detail::invoke_tool_entry<M, Self>});
     }
     // … prompt / resource identical, different marker
 }
