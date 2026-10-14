@@ -15,6 +15,7 @@
 #include <atomic>
 #include <cppcodec/base64_rfc4648.hpp>
 #include <cstddef>
+#include <cstdint>
 #include <httplib.h>
 #include <iostream>
 #include <istream>
@@ -26,6 +27,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace mcp {
@@ -203,6 +205,25 @@ template <std::meta::info Fn> consteval std::string_view prompt_arguments() {
         std::make_index_sequence<js::param_count<Fn>()>())));
 }
 
+/// One text block. `value` is the block's `text`.
+struct text {
+    std::string value;
+};
+
+/// One image block. `bytes` are raw; the server base64-encodes them.
+struct image {
+    std::string mime_type;
+    std::vector<std::uint8_t> bytes;
+};
+
+/// An ordered list of text and image blocks. A tool returns this or
+/// `std::string`.
+struct content {
+    std::vector<std::variant<text, image>> blocks;
+    void add(text _block) { blocks.push_back(std::move(_block)); }
+    void add(image _block) { blocks.push_back(std::move(_block)); }
+};
+
 namespace detail {
 
 /// Per-entity trampoline. A pointer-to-member cannot be formed from a runtime
@@ -253,6 +274,56 @@ inline nlohmann::json text_content(std::string _text, bool _is_error) {
                 {"content", json::array({json{{"type", "text"},
                                               {"text", std::move(_text)}}})},
                 {"isError", _is_error}};
+}
+
+/// What a tool trampoline returns: the `tools/call` result object, and the
+/// string `call_tool` prints.
+struct tool_body {
+    nlohmann::json result;
+    std::string cli;
+};
+
+inline tool_body content_body(content _content) {
+    using nlohmann::json;
+    json blocks = json::array();
+    std::string cli;
+    for (auto &block : _content.blocks) {
+        if (auto *written = std::get_if<text>(&block)) {
+            cli += written->value;
+            blocks.push_back(
+                json{{"type", "text"}, {"text", std::move(written->value)}});
+        } else {
+            auto &picture = std::get<image>(block);
+            blocks.push_back(
+                json{{"type", "image"},
+                     {"data", cppcodec::base64_rfc4648::encode<std::string>(
+                                  picture.bytes.data(), picture.bytes.size())},
+                     {"mimeType", std::move(picture.mime_type)}});
+        }
+    }
+    return tool_body{json{{"resultType", "complete"},
+                          {"content", std::move(blocks)},
+                          {"isError", false}},
+                     std::move(cli)};
+}
+
+/// Tool trampoline. A `std::string` body is one text block and `--call` prints
+/// that string. A `content` body is its blocks, and `--call` prints only the
+/// text values, concatenated.
+template <std::meta::info Fn, typename Self>
+tool_body invoke_tool_entry(void *_self, const nlohmann::json &_args) {
+    using R = std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
+        *static_cast<Self *>(_self), _args))>;
+    static_assert(std::is_same_v<R, std::string> || std::is_same_v<R, content>,
+                  "mcp tool must return std::string or mcp::content");
+    if constexpr (std::is_same_v<R, std::string>) {
+        std::string value =
+            js::invoke_member_with_json<Fn>(*static_cast<Self *>(_self), _args);
+        return {text_content(value, false), value};
+    } else {
+        return content_body(js::invoke_member_with_json<Fn>(
+            *static_cast<Self *>(_self), _args));
+    }
 }
 
 } // namespace detail
@@ -312,7 +383,7 @@ private:
         std::string_view description;
         std::string_view input_schema; // bare JSON Schema, as text
         void *self;
-        std::string (*run)(void *, const nlohmann::json &);
+        detail::tool_body (*run)(void *, const nlohmann::json &);
         tool hints; // client hints, not schema
     };
     struct Prompt {
@@ -374,7 +445,7 @@ void Server<Derived>::register_member(Self *_self) {
         m_tools.push_back(
             Tool{std::meta::identifier_of(M), tool_description<M>(),
                  js::function_schema<M, js::Style::JsonSchema>(), _self,
-                 &detail::invoke_member_entry<M, Self>, tool_marker<M>()});
+                 &detail::invoke_tool_entry<M, Self>, tool_marker<M>()});
     } else if constexpr (has_annotation<M, ^^mcp::prompt>()) {
         m_prompts.push_back(Prompt{std::meta::identifier_of(M),
                                    tool_description<M>(), prompt_arguments<M>(),
@@ -455,7 +526,7 @@ std::string Server<Derived>::call_tool(std::string_view _name,
         throw std::runtime_error("unknown tool: " + std::string(_name));
     }
     try {
-        return tool->run(tool->self, _args);
+        return tool->run(tool->self, _args).cli;
     } catch (const std::exception &_e) {
         throw std::runtime_error("tool " + std::string(_name) +
                                  " failed: " + _e.what());
@@ -627,7 +698,7 @@ Server<Derived>::on_tools_call(const nlohmann::json &_params) const {
         throw detail::RpcError(-32602, "Unknown tool: " + name);
     }
     try {
-        return detail::text_content(tool->run(tool->self, args), false);
+        return tool->run(tool->self, args).result;
     } catch (const std::exception &_e) {
         // The tool ran and threw: a *result* with isError, not a JSON-RPC
         // error.

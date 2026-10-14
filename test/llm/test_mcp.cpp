@@ -1,8 +1,10 @@
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -592,4 +594,159 @@ TEST(Mcp, http_matches_a_base64_mcp_name_header) {
         EXPECT_EQ(json::parse(bad->body).at("error").at("code"), -32020)
             << corrupt;
     }
+}
+
+class ContentServer : public mcp::Server<ContentServer> {
+public:
+    std::string_view server_name() const override { return "content"; }
+    std::string_view server_version() const override { return "0"; }
+
+    [[= mcp::tool{}]] mcp::content preview() {
+        mcp::content out;
+        out.add(mcp::text{"compiled"});
+        out.add(mcp::image{"image/png", {0x68, 0x69}});
+        return out;
+    }
+    [[= mcp::tool{}]] mcp::content picture_only() {
+        mcp::content out;
+        out.add(mcp::image{"image/png", {0x68, 0x69}});
+        return out;
+    }
+    [[= mcp::tool{}]] mcp::content around() {
+        mcp::content out;
+        out.add(mcp::text{"ab"});
+        out.add(mcp::image{"image/png", {0x68, 0x69}});
+        out.add(mcp::text{"c"});
+        return out;
+    }
+    [[= mcp::tool{}]] mcp::content blank_image() {
+        mcp::content out;
+        out.add(mcp::image{"", {}});
+        return out;
+    }
+    [[= mcp::tool{}]] mcp::content empty_content() { return {}; }
+    [[= mcp::tool{}]] mcp::content embedded_nul() {
+        mcp::content out;
+        out.add(mcp::image{"image/png", {0x00, 0x68, 0x69}});
+        return out;
+    }
+    [[= mcp::tool{}]] mcp::content boom_content() {
+        throw std::runtime_error("nope");
+    }
+    [[= mcp::tool{}]] std::string boom_text() {
+        throw std::runtime_error("nope");
+    }
+};
+
+json content_result(ContentServer &_server, std::string_view _name) {
+    const json reply = json::parse([&] {
+        std::istringstream in{
+            request("tools/call",
+                    {{"name", _name}, {"arguments", json::object()}})
+                .dump() +
+            "\n"};
+        std::ostringstream out;
+        _server.serve(in, out);
+        return out.str();
+    }());
+    return reply.at("result");
+}
+
+TEST(McpContent, tools_call_emits_text_then_image) {
+    ContentServer server;
+    const json result = content_result(server, "preview");
+    EXPECT_EQ(result.at("resultType"), "complete");
+    EXPECT_EQ(result.at("isError"), false);
+    EXPECT_EQ(result.at("content").size(), 2u);
+    EXPECT_EQ(result.at("content").at(0),
+              json({{"type", "text"}, {"text", "compiled"}}));
+    EXPECT_EQ(
+        result.at("content").at(1),
+        json({{"type", "image"}, {"data", "aGk="}, {"mimeType", "image/png"}}));
+
+    const json listed = [&] {
+        std::istringstream in{request("tools/list").dump() + "\n"};
+        std::ostringstream out;
+        ContentServer fresh;
+        fresh.serve(in, out);
+        return json::parse(out.str()).at("result");
+    }();
+    const json &preview = listed.at("tools").at(0);
+    EXPECT_EQ(preview.at("name"), "preview");
+    EXPECT_EQ(preview.at("inputSchema").at("type"), "object");
+    EXPECT_FALSE(preview.contains("outputSchema"));
+}
+
+TEST(McpContent, call_tool_returns_the_text_only) {
+    ContentServer server;
+    EXPECT_EQ(server.call_tool("preview", json::object()), "compiled");
+    EXPECT_EQ(server.call_tool("picture_only", json::object()), "");
+    EXPECT_EQ(server.call_tool("around", json::object()), "abc");
+    EXPECT_EQ(server.call_tool("empty_content", json::object()), "");
+}
+
+TEST(McpContent, picture_only_is_one_image_block) {
+    ContentServer server;
+    const json content = content_result(server, "picture_only").at("content");
+    ASSERT_EQ(content.size(), 1u);
+    EXPECT_EQ(content.at(0).at("type"), "image");
+    EXPECT_EQ(content.at(0).at("data"), "aGk=");
+}
+
+TEST(McpContent, empty_image_emits_empty_strings) {
+    ContentServer server;
+    const json block =
+        content_result(server, "blank_image").at("content").at(0);
+    EXPECT_EQ(block, json({{"type", "image"}, {"data", ""}, {"mimeType", ""}}));
+}
+
+TEST(McpContent, empty_content_is_a_successful_empty_array) {
+    ContentServer server;
+    const json result = content_result(server, "empty_content");
+    EXPECT_EQ(result.at("isError"), false);
+    EXPECT_EQ(result.at("content"), json::array());
+}
+
+TEST(McpContent, embedded_nul_is_encoded) {
+    ContentServer server;
+    EXPECT_EQ(
+        content_result(server, "embedded_nul").at("content").at(0).at("data"),
+        "AGhp");
+}
+
+TEST(McpContent, throw_is_one_error_text_block) {
+    ContentServer server;
+    for (const char *name : {"boom_content", "boom_text"}) {
+        const json result = content_result(server, name);
+        EXPECT_EQ(result.at("isError"), true) << name;
+        ASSERT_EQ(result.at("content").size(), 1u) << name;
+        EXPECT_EQ(result.at("content").at(0),
+                  json({{"type", "text"}, {"text", "nope"}}))
+            << name;
+    }
+}
+
+TEST(McpContent, handshake_era_keeps_the_image_and_drops_result_type) {
+    ContentServer server;
+    std::string input =
+        request("initialize",
+                {{"protocolVersion", std::string(mcp::kHandshakeVersion)}})
+            .dump() +
+        "\n" +
+        request("tools/call",
+                {{"name", "preview"}, {"arguments", json::object()}})
+            .dump() +
+        "\n";
+    std::istringstream in{input};
+    std::ostringstream out;
+    server.serve(in, out);
+    std::istringstream lines{out.str()};
+    std::string line;
+    std::getline(lines, line); // initialize
+    std::getline(lines, line);
+    const json result = json::parse(line).at("result");
+    EXPECT_FALSE(result.contains("resultType"));
+    EXPECT_FALSE(result.contains("_meta"));
+    EXPECT_EQ(result.at("content").at(1).at("data"), "aGk=");
+    EXPECT_EQ(result.at("isError"), false);
 }
