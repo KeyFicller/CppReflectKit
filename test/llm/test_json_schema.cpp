@@ -199,6 +199,12 @@ constexpr std::string_view shape_schema =
 constexpr std::string_view optional_arg_schema =
     js::function_schema<^^optional_arg>();
 
+[[maybe_unused]] int with_default(int value, int fallback = 1) {
+    return value + fallback;
+}
+constexpr std::string_view with_default_schema =
+    js::function_schema<^^with_default>();
+
 } // namespace
 
 TEST(JsonSchema, generated_shapes_are_well_formed) {
@@ -206,6 +212,9 @@ TEST(JsonSchema, generated_shapes_are_well_formed) {
     EXPECT_TRUE(check_tool_schema("openai tool", tool_schema));
     EXPECT_TRUE(check_schema("struct Query", query_schema));
     EXPECT_TRUE(check_schema("struct SearchRequest", request_schema));
+    EXPECT_TRUE(check_schema("variant Shape", shape_schema));
+    EXPECT_TRUE(check_schema("optional_arg", optional_arg_schema));
+    EXPECT_TRUE(check_schema("with_default", with_default_schema));
 }
 
 TEST(JsonSchema, descriptions_come_from_the_annotations) {
@@ -248,6 +257,44 @@ TEST(JsonSchema, optional_fields_are_required_and_nullable) {
     EXPECT_EQ(fn->at("required"), json::array({"value", "extra"}));
     EXPECT_EQ(fn->at("properties").at("extra").at("anyOf").back().at("type"),
               "null");
+
+    const auto request = parse_json(request_schema);
+    ASSERT_TRUE(request.has_value());
+    EXPECT_EQ(request->at("required"), json::array({"query"}));
+
+    const auto fallback = parse_json(with_default_schema);
+    ASSERT_TRUE(fallback.has_value());
+    EXPECT_EQ(fallback->at("required"), json::array({"value", "fallback"}));
+}
+
+TEST(JsonSchema, null_satisfies_an_optional_and_a_default_argument_does_not) {
+    const app::SearchRequest req = decode_request(
+        R"({"query":{"text":"x","ranges":[{"min":2,"max":null}],"weight":null}})");
+    EXPECT_EQ(req.query.weight, std::nullopt);
+    ASSERT_EQ(req.query.ranges.size(), 1u);
+    EXPECT_EQ(req.query.ranges[0].max, std::nullopt);
+    EXPECT_EQ(req.query.ranges[0].min, 2);
+    EXPECT_EQ(req.query.unit, app::Unit::Celsius);
+    EXPECT_FALSE(req.query.fuzzy);
+    EXPECT_FALSE(req.debug);
+
+    const auto omitted = parse_json(R"({"value":4})");
+    const auto nulled = parse_json(R"({"value":4,"extra":null})");
+    const auto given = parse_json(R"({"value":4,"extra":9})");
+    ASSERT_TRUE(omitted.has_value() && nulled.has_value() && given.has_value());
+    EXPECT_EQ(js::invoke_with_json<^^optional_arg>(*omitted), 4);
+    EXPECT_EQ(js::invoke_with_json<^^optional_arg>(*nulled), 4);
+    EXPECT_EQ(js::invoke_with_json<^^optional_arg>(*given), 9);
+
+    const auto missing_fallback = parse_json(R"({"value":4})");
+    ASSERT_TRUE(missing_fallback.has_value());
+    EXPECT_EQ(bind_error_message([&] {
+                  (void)js::invoke_with_json<^^with_default>(*missing_fallback);
+              }),
+              "missing required argument: fallback");
+    const auto both = parse_json(R"({"value":4,"fallback":3})");
+    ASSERT_TRUE(both.has_value());
+    EXPECT_EQ(js::invoke_with_json<^^with_default>(*both), 7);
 }
 
 TEST(JsonSchema, schema_annotations_survive_serialization) {
@@ -400,6 +447,18 @@ TEST(JsonSchema, an_unknown_key_is_rejected) {
                   (void)js::invoke_member_with_json<
                       ^^app::CppReflectServer::search_documents>(server,
                                                                  *extra);
+              }),
+              "unknown key: nope");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[{"min":1,"extra":true}]}})");
+              }),
+              "query: ranges: unknown key: extra");
+
+    const auto free = parse_json(R"({"value":4,"extra":1,"nope":true})");
+    ASSERT_TRUE(free.has_value());
+    EXPECT_EQ(bind_error_message([&] {
+                  (void)js::invoke_with_json<^^optional_arg>(*free);
               }),
               "unknown key: nope");
 }

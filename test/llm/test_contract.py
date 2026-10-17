@@ -77,6 +77,7 @@ def test_emit_tools_is_openai_shaped():
     fn = tool_by_name(tools, "search_documents")
     params = fn["parameters"]
     assert params["type"] == "object"
+    assert params["additionalProperties"] is False
     assert set(params["properties"]) == {"query", "limit", "exact_match"}
     # The reflected signature decides what is required; none of the three is optional.
     assert set(params["required"]) == {"query", "limit", "exact_match"}
@@ -130,7 +131,17 @@ def test_emit_schemas_covers_the_registered_models():
         assert wrapper["function"]["parameters"]["type"] == "object"
         assert wrapper["function"]["parameters"]["additionalProperties"] is False
     # A required member of a nested struct propagates up into its parent.
-    assert schemas["SearchRequest"]["function"]["parameters"]["required"] == ["query"]
+    search = schemas["SearchRequest"]["function"]["parameters"]
+    assert search["required"] == ["query"]
+    assert search["properties"]["query"]["additionalProperties"] is False
+    query = schemas["Query"]["function"]["parameters"]
+    assert query["additionalProperties"] is False
+    assert query["required"] == ["text", "ranges", "weight"]
+    assert query["properties"]["weight"]["anyOf"][-1] == {"type": "null"}
+    ranges = query["properties"]["ranges"]["items"]
+    assert ranges["additionalProperties"] is False
+    assert ranges["required"] == ["max"]
+    assert ranges["properties"]["max"]["anyOf"][-1] == {"type": "null"}
 
 
 def test_parse_reconstructs_a_struct_from_model_json():
@@ -144,6 +155,30 @@ def test_parse_reconstructs_a_struct_from_model_json():
     assert out["query"]["fuzzy"] is True
     assert out["top_k"] == [3, 5, 8]
     assert out["debug"] is False
+
+
+def test_parse_rejects_an_unknown_key():
+    result = subprocess.run(
+        [BINARY, "--parse", "SearchRequest"],
+        input=json.dumps({"query": {"text": "x", "ranges": []}, "extra": 1}),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "unknown key: extra" in result.stderr
+
+
+def test_call_rejects_an_unknown_argument():
+    result = subprocess.run(
+        [BINARY, "--call", "search_documents"],
+        input=json.dumps(
+            {"query": "x", "limit": 1, "exact_match": True, "nope": 1}
+        ),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "unknown key: nope" in result.stderr
 
 
 def test_parse_rejects_an_unknown_model():
