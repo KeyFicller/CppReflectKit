@@ -74,6 +74,8 @@ constexpr auto tool          = js::function_schema<^^greet, js::Style::OpenAiToo
                                 "additionalProperties": false } } }
 ```
 
+Tool wrappers are OpenAI only. The Anthropic tool shape is not supported yet.
+
 ### `mcp::` — MCP server (`reflection_mcp.h`)
 
 A CRTP base whose constructor *scans* the derived class: a marked **non-static
