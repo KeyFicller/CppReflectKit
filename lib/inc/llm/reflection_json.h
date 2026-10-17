@@ -578,6 +578,39 @@ template <typename T, std::size_t I> consteval meta::info member_at() {
     return member_infos<T>()[I];
 }
 
+template <typename T, std::size_t... Is>
+consteval std::array<std::string_view, sizeof...(Is)> member_names(
+    std::index_sequence<Is...>) {
+    constexpr auto infos = member_infos<T>();
+    return {std::string_view(
+        std::define_static_string(meta::identifier_of(infos[Is])))...};
+}
+
+template <meta::info Fn, std::size_t... Is>
+consteval std::array<std::string_view, sizeof...(Is)> param_names(
+    std::index_sequence<Is...>) {
+    return {std::string_view(std::define_static_string(
+        meta::identifier_of(param_at<Fn, Is>())))...};
+}
+
+template <std::size_t N>
+void reject_unknown_keys(const nlohmann::json &_j,
+                         const std::array<std::string_view, N> &_names) {
+    for (const auto &item : _j.items()) {
+        const std::string &key = item.key();
+        bool known = false;
+        for (const std::string_view name : _names) {
+            if (key == name) {
+                known = true;
+                break;
+            }
+        }
+        if (!known) {
+            throw bind_error("unknown key: " + key);
+        }
+    }
+}
+
 template <meta::info M>
 void assign_member(auto &_out, const nlohmann::json &_j) {
     using MT = std::remove_cvref_t<typename[:meta::type_of(M):]>;
@@ -603,6 +636,8 @@ void assign_member(auto &_out, const nlohmann::json &_j) {
 /// with neither a default nor std::optional is required and throws when absent.
 template <typename T, std::size_t... Is>
 T object_from_json(const nlohmann::json &_j, std::index_sequence<Is...>) {
+    constexpr auto names = member_names<T>(std::index_sequence<Is...>{});
+    reject_unknown_keys(_j, names);
     T out{};
     (assign_member<member_at<T, Is>()>(out, _j), ...);
     return out;
@@ -775,6 +810,10 @@ void assign_argument(auto &_args, const nlohmann::json &_j) {
 template <meta::info Fn, std::size_t... Is>
 auto invoke_with_json_impl(const nlohmann::json &_j,
                            std::index_sequence<Is...>) {
+    constexpr auto names = param_names<Fn>(std::index_sequence<Is...>{});
+    if (_j.is_object()) {
+        reject_unknown_keys(_j, names);
+    }
     std::tuple<param_type_at<Fn, Is>...> args{};
     (assign_argument<Fn, Is>(args, _j), ...);
     return std::apply(&[:Fn:], args);
@@ -792,6 +831,10 @@ template <meta::info Fn> auto invoke_with_json(const nlohmann::json &_j) {
 template <meta::info Fn, typename Self, std::size_t... Is>
 auto invoke_member_impl(Self &_self, const nlohmann::json &_j,
                         std::index_sequence<Is...>) {
+    constexpr auto names = param_names<Fn>(std::index_sequence<Is...>{});
+    if (_j.is_object()) {
+        reject_unknown_keys(_j, names);
+    }
     std::tuple<param_type_at<Fn, Is>...> args{};
     (assign_argument<Fn, Is>(args, _j), ...);
     return (_self.*&[:Fn:])(std::get<Is>(args)...);

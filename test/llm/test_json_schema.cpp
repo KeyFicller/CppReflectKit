@@ -380,6 +380,30 @@ TEST(JsonSchema, a_mistyped_enum_is_rejected) {
               "query: unit: invalid Unit value: Kelvin");
 }
 
+TEST(JsonSchema, an_unknown_key_is_rejected) {
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[]},"extra":1})");
+              }),
+              "unknown key: extra");
+    EXPECT_EQ(bind_error_message([] {
+                  (void)decode_request(
+                      R"({"query":{"text":"x","ranges":[],"nope":true}})");
+              }),
+              "query: unknown key: nope");
+
+    app::CppReflectServer server;
+    const auto extra = parse_json(
+        R"({"query":"reflection","limit":1,"exact_match":true,"nope":1})");
+    ASSERT_TRUE(extra.has_value());
+    EXPECT_EQ(bind_error_message([&] {
+                  (void)js::invoke_member_with_json<
+                      ^^app::CppReflectServer::search_documents>(server,
+                                                                 *extra);
+              }),
+              "unknown key: nope");
+}
+
 TEST(JsonSchema, a_missing_required_member_is_rejected) {
     // `text` and `ranges` carry no initializer, so they must be present; `unit`
     // and `debug` do, so they may be omitted.
@@ -459,14 +483,28 @@ TEST(JsonSchema, a_variant_round_trips_through_to_json) {
     EXPECT_EQ(json::parse(js::to_json(shape)), rect);
 }
 
-TEST(JsonSchema, an_ambiguous_variant_document_is_rejected) {
-    // Both alternatives' members are present, so both fit and the document does
-    // not say which it is.
+TEST(JsonSchema, a_document_naming_both_alternatives_matches_neither) {
+    // Each alternative rejects the other's keys, so the document fits none.
     const auto both = parse_json(R"({"width":1,"height":2,"radius":3})");
     ASSERT_TRUE(both.has_value());
     EXPECT_EQ(bind_error_message([&] { (void)js::from_json<Shape>(*both); }),
-              "variant is ambiguous: 2 alternatives matched (Rectangle, "
-              "Circle)");
+              "no variant alternative matched: Rectangle: unknown key: radius, "
+              "Circle: unknown key: height");
+}
+
+struct SameA {
+    int value;
+};
+struct SameB {
+    int value;
+};
+using SameShape = std::variant<SameA, SameB>;
+
+TEST(JsonSchema, an_ambiguous_variant_document_is_rejected) {
+    const auto both = parse_json(R"({"value":1})");
+    ASSERT_TRUE(both.has_value());
+    EXPECT_EQ(bind_error_message([&] { (void)js::from_json<SameShape>(*both); }),
+              "variant is ambiguous: 2 alternatives matched (SameA, SameB)");
 }
 
 TEST(JsonSchema, a_variant_document_matching_no_alternative_is_rejected) {
@@ -476,8 +514,8 @@ TEST(JsonSchema, a_variant_document_matching_no_alternative_is_rejected) {
     ASSERT_TRUE(none.has_value());
     EXPECT_EQ(
         bind_error_message([&] { (void)js::from_json<Shape>(*none); }),
-        "no variant alternative matched: Rectangle: missing required member: "
-        "width, Circle: radius: expected number");
+        "no variant alternative matched: Rectangle: unknown key: radius, "
+        "Circle: radius: expected number");
 }
 
 TEST(JsonSchema, the_consumer_learns_which_alternative_is_active) {

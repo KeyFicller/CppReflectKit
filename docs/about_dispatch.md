@@ -86,8 +86,9 @@ the implicit object parameter, so the indices still line up with the schema.
 ## Step 3, in each direction
 
 **A tool call looks values up in a document.** The slot is chosen by position, the
-value by name, so key order is irrelevant and a key matching no parameter is never
-read. Each level of decoding prefixes the message with the name it was working on,
+value by name, so key order is irrelevant. A key matching no parameter is a
+`bind_error`. Each level of decoding prefixes the message with the name it was
+working on,
 so an error points at the offending argument rather than at the call.
 
 **A control reads values out of an annotation.** For parameter `I` of the named
@@ -105,4 +106,4 @@ means:
 |---|---|---|
 | Absent name, optional type | `std::nullopt` | — |
 | Absent name, otherwise | `bind_error` | default-constructed value |
-| A name that matches nothing | ignored | ignored |
+| A name that matches nothing | `bind_error` | ignored |
