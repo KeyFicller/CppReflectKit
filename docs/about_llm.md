@@ -87,9 +87,7 @@ reflected struct → a nested object):
 
 ```cpp
 properties += "\"" + name + "\":" + with_description(param_schema<PT>(), param_description<Fn, Is>());
-if constexpr (!is_optional<PT>::value && !meta::has_default_argument(param_at<Fn, Is>())) {
-    required += "\"" + name + "\"";
-}
+required += "\"" + name + "\"";   // std::optional included; its schema is anyOf [T, null]
 ```
 
 **3. Two emitters, one table.** A row stores the *bare* `inputSchema` plus name and

@@ -302,7 +302,7 @@ consteval std::string object_schema_impl(std::index_sequence<Is...>) {
          properties += "\"" + name + "\":" +
                        with_description(param_schema<MT>(),
                                         text_of<^^js::desc, infos[Is]>());
-         if constexpr (!is_optional<MT>::value &&
+         if constexpr (is_optional<MT>::value ||
                        !meta::has_default_member_initializer(infos[Is])) {
              if (!required.empty()) {
                  required += ",";
@@ -409,12 +409,10 @@ consteval std::string param_object_schema_impl(std::index_sequence<Is...>) {
              with_description(param_schema<PT>(), param_description<Fn, Is>());
          // A default argument does not make a parameter omittable: its value
          // cannot be recovered at dispatch time, so the model must supply it.
-         if constexpr (!is_optional<PT>::value) {
-             if (!required.empty()) {
-                 required += ",";
-             }
-             required += "\"" + name + "\"";
+         if (!required.empty()) {
+             required += ",";
          }
+         required += "\"" + name + "\"";
      }()),
      ...);
     return "{\"type\":\"object\",\"properties\":{" + properties +

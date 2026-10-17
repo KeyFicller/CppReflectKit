@@ -193,6 +193,12 @@ using Shape = std::variant<Rectangle, Circle>;
 constexpr std::string_view shape_schema =
     std::define_static_string(js::param_schema<Shape>());
 
+[[maybe_unused]] int optional_arg(int value, std::optional<int> extra) {
+    return extra.value_or(value);
+}
+constexpr std::string_view optional_arg_schema =
+    js::function_schema<^^optional_arg>();
+
 } // namespace
 
 TEST(JsonSchema, generated_shapes_are_well_formed) {
@@ -222,6 +228,26 @@ TEST(JsonSchema, descriptions_come_from_the_annotations) {
     ASSERT_TRUE(request.has_value());
     expect_description(request->at("properties").at("query").at("properties"),
                        "unit", "Temperature unit for numeric filters.");
+}
+
+TEST(JsonSchema, optional_fields_are_required_and_nullable) {
+    const auto query = parse_json(query_schema);
+    ASSERT_TRUE(query.has_value());
+    EXPECT_EQ(query->at("required"), json::array({"text", "ranges", "weight"}));
+    const json &weight = query->at("properties").at("weight");
+    ASSERT_TRUE(weight.contains("anyOf"));
+    EXPECT_EQ(weight.at("anyOf").back().at("type"), "null");
+
+    const json &range = query->at("properties").at("ranges").at("items");
+    EXPECT_EQ(range.at("required"), json::array({"max"}));
+    EXPECT_EQ(range.at("properties").at("max").at("anyOf").back().at("type"),
+              "null");
+
+    const auto fn = parse_json(optional_arg_schema);
+    ASSERT_TRUE(fn.has_value());
+    EXPECT_EQ(fn->at("required"), json::array({"value", "extra"}));
+    EXPECT_EQ(fn->at("properties").at("extra").at("anyOf").back().at("type"),
+              "null");
 }
 
 TEST(JsonSchema, schema_annotations_survive_serialization) {
