@@ -343,9 +343,32 @@ inline tool_body content_body(content _content) {
                      std::move(cli)};
 }
 
+/// A return `to_json` can write, other than the two wire carriers (`std::string`
+/// is a text block, `content` is its blocks). The value goes out as
+/// `structuredContent`; `tools/list` does not advertise an output schema.
+template <typename R> consteval bool structured_tool_return() {
+    if constexpr (std::is_same_v<R, std::string> || std::is_same_v<R, content> ||
+                  std::is_same_v<R, text> || std::is_same_v<R, image> ||
+                  std::is_same_v<R, message> || std::is_same_v<R, blob>) {
+        return false;
+    } else {
+        return js::can_schema<R>();
+    }
+}
+
+/// `tools/call` result for a structured return: `content` still carries the
+/// JSON as text, and `structuredContent` carries the same value as JSON.
+inline tool_body structured_body(std::string _json) {
+    using nlohmann::json;
+    json result = text_content(_json, false);
+    result["structuredContent"] = json::parse(_json);
+    return {std::move(result), std::move(_json)};
+}
+
 /// Tool trampoline. A `std::string` body is one text block and `--call` prints
 /// that string. A `content` body is its blocks, and `--call` prints only the
-/// text values, concatenated.
+/// text values, concatenated. Any other schema-able return is `to_json`'d into
+/// `structuredContent`.
 ///
 /// A pointer-to-member cannot be formed from a runtime reflection, but it can
 /// from a template instantiation, so the registry stores
@@ -355,15 +378,20 @@ template <std::meta::info Fn, typename Self>
 tool_body invoke_tool_entry(void *_self, const nlohmann::json &_args) {
     using R = std::remove_cvref_t<decltype(js::invoke_member_with_json<Fn>(
         *static_cast<Self *>(_self), _args))>;
-    static_assert(std::is_same_v<R, std::string> || std::is_same_v<R, content>,
-                  "mcp tool must return std::string or mcp::content");
+    static_assert(std::is_same_v<R, std::string> || std::is_same_v<R, content> ||
+                      structured_tool_return<R>(),
+                  "mcp tool must return std::string, mcp::content, or a type "
+                  "with a JSON schema");
     if constexpr (std::is_same_v<R, std::string>) {
         std::string value =
             js::invoke_member_with_json<Fn>(*static_cast<Self *>(_self), _args);
         return {text_content(value, false), value};
-    } else {
+    } else if constexpr (std::is_same_v<R, content>) {
         return content_body(js::invoke_member_with_json<Fn>(
             *static_cast<Self *>(_self), _args));
+    } else {
+        return structured_body(js::to_json(js::invoke_member_with_json<Fn>(
+            *static_cast<Self *>(_self), _args)));
     }
 }
 

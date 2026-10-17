@@ -288,6 +288,42 @@ consteval std::array<meta::info, member_count<T>()> member_infos() {
     return out;
 }
 
+/// True when param_schema<T>() can describe T. A class is included only when
+/// every member is, so a tool can return that class as structuredContent.
+template <typename T> consteval bool can_schema();
+
+template <typename T, std::size_t... Is>
+consteval bool can_schema_variant(std::index_sequence<Is...>) {
+    return (can_schema<std::variant_alternative_t<Is, T>>() && ...);
+}
+
+template <typename T, std::size_t... Is>
+consteval bool can_schema_members(std::index_sequence<Is...>) {
+    constexpr auto infos = member_infos<T>();
+    return (can_schema<std::remove_cvref_t<
+                typename[:meta::type_of(infos[Is]):]>>() &&
+            ...);
+}
+
+template <typename T> consteval bool can_schema() {
+    using U = std::remove_cvref_t<T>;
+    if constexpr (is_optional<U>::value) {
+        return can_schema<typename U::value_type>();
+    } else if constexpr (is_sequence<U>::value) {
+        return can_schema<typename is_sequence<U>::value_type>();
+    } else if constexpr (is_variant<U>::value) {
+        return can_schema_variant<U>(
+            std::make_index_sequence<std::variant_size_v<U>>());
+    } else if constexpr (std::is_enum_v<U>) {
+        return true;
+    } else if constexpr (std::is_class_v<U> && !is_string_like_v<U>) {
+        return can_schema_members<U>(
+            std::make_index_sequence<member_count<U>()>());
+    } else {
+        return is_json_scalar_v<U>;
+    }
+}
+
 template <typename T, std::size_t... Is>
 consteval std::string object_schema_impl(std::index_sequence<Is...>) {
     constexpr auto infos = member_infos<T>();

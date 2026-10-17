@@ -786,6 +786,23 @@ public:
     }
 };
 
+/// A tool return `to_json` can write. The call carries structuredContent;
+/// tools/list does not grow an outputSchema.
+struct FoundLine {
+    std::string file;
+    int line;
+};
+
+class StructuredServer : public mcp::Server<StructuredServer> {
+public:
+    std::string_view server_name() const override { return "structured"; }
+    std::string_view server_version() const override { return "0"; }
+
+    [[= mcp::tool{}]] FoundLine locate() {
+        return {"docs/about_llm.md", 4};
+    }
+};
+
 /// The reply line for one request through a real serve() loop.
 template <class S> json served(S &_server, const json &_request) {
     std::istringstream in{_request.dump() + "\n"};
@@ -903,4 +920,28 @@ TEST(McpRich, listing_and_read_agree_on_a_binary_mime) {
                   .at(0)
                   .at("mimeType"),
               shot.at("mimeType"));
+}
+
+TEST(McpStructured, tools_list_has_no_output_schema) {
+    StructuredServer server;
+    const json tools =
+        served(server, request("tools/list")).at("result").at("tools");
+    ASSERT_EQ(tools.size(), 1u);
+    EXPECT_EQ(tools.at(0).at("name"), "locate");
+    EXPECT_EQ(tools.at(0).at("inputSchema").at("type"), "object");
+    EXPECT_FALSE(tools.at(0).contains("outputSchema"));
+}
+
+TEST(McpStructured, a_struct_return_is_structured_content) {
+    StructuredServer server;
+    const json result =
+        served(server, request("tools/call", {{"name", "locate"},
+                                              {"arguments", json::object()}}))
+            .at("result");
+    const json value = json{{"file", "docs/about_llm.md"}, {"line", 4}};
+    EXPECT_EQ(result.at("isError"), false);
+    EXPECT_EQ(result.at("structuredContent"), value);
+    EXPECT_EQ(json::parse(result.at("content").at(0).at("text").get<std::string>()),
+              value);
+    EXPECT_EQ(server.call_tool("locate", json::object()), value.dump());
 }
