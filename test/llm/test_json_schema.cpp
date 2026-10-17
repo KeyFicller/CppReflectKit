@@ -28,8 +28,9 @@ std::optional<json> parse_json(std::string_view _text) {
 }
 
 /// Recursively checks every object schema in `_doc`: nodes with
-/// "type":"object" must carry "properties" and a "required" array, and every
-/// required name must be declared in "properties".
+/// "type":"object" must carry "properties", a "required" array, and
+/// "additionalProperties": false.
+/// Every required name must be declared in "properties".
 bool check_object_shapes(const json &_doc, const std::string &_path) {
     if (_doc.is_object()) {
         const bool is_object_schema =
@@ -54,6 +55,13 @@ bool check_object_shapes(const json &_doc, const std::string &_path) {
                                   << "\", absent from \"properties\"";
                     return false;
                 }
+            }
+            if (!_doc.contains("additionalProperties") ||
+                _doc.at("additionalProperties") != false) {
+                ADD_FAILURE() << _path
+                              << ": object schema must set "
+                                 "\"additionalProperties\" to false";
+                return false;
             }
         }
         for (const auto &[key, value] : _doc.items()) {

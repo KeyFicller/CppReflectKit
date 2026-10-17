@@ -60,7 +60,8 @@ constexpr auto tool          = js::function_schema<^^greet, js::Style::OpenAiToo
 { "type": "object",
   "properties": { "x": { "type": "integer", "description": "Horizontal offset." },
                   "y": { "type": "integer", "description": "Vertical offset." } },
-  "required": ["x", "y"] }
+  "required": ["x", "y"],
+  "additionalProperties": false }
 
 // js::function_schema<^^greet, js::Style::OpenAiTool>()
 { "type": "function",
@@ -69,7 +70,8 @@ constexpr auto tool          = js::function_schema<^^greet, js::Style::OpenAiToo
                 "parameters": { "type": "object",
                                 "properties": { "name": { "type": "string",
                                                           "description": "Who to greet." } },
-                                "required": ["name"] } } }
+                                "required": ["name"],
+                                "additionalProperties": false } } }
 ```
 
 ### `mcp::` — MCP server (`reflection_mcp.h`)
@@ -122,7 +124,8 @@ name, schema, `required` and the call all derived from the signatures:
   "inputSchema": { "type": "object",
                    "properties": { "name": { "type": "string",
                                              "description": "Who to greet." } },
-                   "required": ["name"] } }
+                   "required": ["name"],
+                   "additionalProperties": false } }
 
 // prompts/list
 { "name": "explain", "description": "Explain a concept.",

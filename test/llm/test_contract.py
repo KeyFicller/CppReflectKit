@@ -128,6 +128,7 @@ def test_emit_schemas_covers_the_registered_models():
         assert wrapper["type"] == "function"
         assert wrapper["function"]["name"] == name
         assert wrapper["function"]["parameters"]["type"] == "object"
+        assert wrapper["function"]["parameters"]["additionalProperties"] is False
     # A required member of a nested struct propagates up into its parent.
     assert schemas["SearchRequest"]["function"]["parameters"]["required"] == ["query"]
 

@@ -312,7 +312,7 @@ consteval std::string object_schema_impl(std::index_sequence<Is...>) {
      }()),
      ...);
     return "{\"type\":\"object\",\"properties\":{" + properties +
-           "},\"required\":[" + required + "]}";
+           "},\"required\":[" + required + "],\"additionalProperties\":false}";
 }
 
 /// anyOf over a variant's alternatives. Each alternative contributes the schema
@@ -418,7 +418,7 @@ consteval std::string param_object_schema_impl(std::index_sequence<Is...>) {
      }()),
      ...);
     return "{\"type\":\"object\",\"properties\":{" + properties +
-           "},\"required\":[" + required + "]}";
+           "},\"required\":[" + required + "],\"additionalProperties\":false}";
 }
 
 template <meta::info Fn> consteval std::string param_object_schema() {

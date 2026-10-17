@@ -31,7 +31,8 @@ From those lines, at compile time:
       "query":       { "type": "string",  "description": "The raw query text." },
       "limit":       { "type": "integer", "description": "Maximum number of hits to return." },
       "exact_match": { "type": "boolean", "description": "Require an exact (case-sensitive) match." } },
-    "required": ["query", "limit", "exact_match"] } }
+    "required": ["query", "limit", "exact_match"],
+    "additionalProperties": false } }
 ```
 
 Name, enum and `required` all come from the signature: every parameter is required
