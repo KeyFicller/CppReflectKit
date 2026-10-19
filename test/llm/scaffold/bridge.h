@@ -16,7 +16,8 @@ namespace bridge {
 /// argv[1..], and `_in` supplies stdin for the commands that take it (it is
 /// left untouched otherwise). Returns the text that belongs on stdout, or
 /// throws std::runtime_error. main() and serve() share this, so a session under
-/// a debugger dispatches exactly like a plain CLI invocation.
+/// a debugger dispatches exactly like a plain CLI invocation. `--mcp` is one
+/// MCP exchange, which is how the socket serves the stdio protocol.
 std::string run_request(const std::vector<std::string> &_args,
                         std::istream &_in);
 

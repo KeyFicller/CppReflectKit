@@ -27,7 +27,8 @@ using json = nlohmann::json;
 /// Runs newline-delimited requests through a fresh server and returns the reply
 /// lines. A request without an id produces no line, which is how the
 /// notification case is observed.
-std::vector<json> drive(const std::vector<std::string> &_requests) {
+template <class S>
+std::vector<json> drive(S &_server, const std::vector<std::string> &_requests) {
     std::string input;
     for (const std::string &request : _requests) {
         input += request;
@@ -35,8 +36,7 @@ std::vector<json> drive(const std::vector<std::string> &_requests) {
     }
     std::istringstream in{input};
     std::ostringstream out;
-    app::CppReflectServer server;
-    server.serve(in, out);
+    _server.serve(in, out);
 
     std::vector<json> replies;
     std::istringstream lines{out.str()};
@@ -45,6 +45,11 @@ std::vector<json> drive(const std::vector<std::string> &_requests) {
         replies.push_back(json::parse(line));
     }
     return replies;
+}
+
+std::vector<json> drive(const std::vector<std::string> &_requests) {
+    app::CppReflectServer server;
+    return drive(server, _requests);
 }
 
 json request(std::string_view _method, json _params = json::object()) {
@@ -151,7 +156,9 @@ TEST(Mcp, tools_list) {
              json{{"name", "cppreflect"}, {"version", "0.1.0"}},
              "every result carries serverInfo");
     const json tools = listed.at("tools");
-    ASSERT_EQ(tools.size(), 1u) << "exactly the marked function is registered";
+    ASSERT_EQ(tools.size(), 2u) << "both marked functions are registered";
+    check_eq(tools.at(1).at("name"), "ask_confirmation",
+             "declaration order decides the table order");
     const json &tool = tools.at(0);
     check_eq(tool.at("name"), "search_documents", "name from identifier_of");
     check_eq(tool.at("description"),
@@ -373,17 +380,17 @@ namespace {
 
 /// One Streamable HTTP server for the cases below. The destructor stops it,
 /// including when an assertion fails.
-struct HttpServer {
-    app::CppReflectServer server;
+template <class S> struct HttpServerOf {
+    S server;
     std::thread thread;
 
-    HttpServer() : thread([this] { server.serve_http(0); }) {
+    HttpServerOf() : thread([this] { server.serve_http(0); }) {
         for (int i = 0; i < 100 && server.http_port() < 0; ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 
-    ~HttpServer() {
+    ~HttpServerOf() {
         server.stop_http();
         if (thread.joinable()) {
             thread.join();
@@ -402,6 +409,8 @@ struct HttpServer {
         return client.Post("/mcp", _headers, _body.dump(), "application/json");
     }
 };
+
+using HttpServer = HttpServerOf<app::CppReflectServer>;
 
 json meta_version(std::string_view _version = mcp::kProtocolVersion) {
     return json{
@@ -944,4 +953,228 @@ TEST(McpStructured, a_struct_return_is_structured_content) {
     EXPECT_EQ(json::parse(result.at("content").at(0).at("text").get<std::string>()),
               value);
     EXPECT_EQ(server.call_tool("locate", json::object()), value.dump());
+}
+
+namespace {
+
+/// The form asked for in the elicitation cases.
+struct Confirm {
+    bool yes;
+    std::string note;
+};
+
+class ElicitServer : public mcp::Server<ElicitServer> {
+public:
+    std::string_view server_name() const override { return "elicit"; }
+    std::string_view server_version() const override { return "0"; }
+
+    // A struct return goes out as structuredContent, so the test reads the
+    // action and the value the way a client does.
+    [[= mcp::tool{}]] mcp::elicit_result<Confirm> ask() {
+        return elicit_form<Confirm>("确认删除？");
+    }
+    // Prompt and resource bodies are text only, so this one reports the two
+    // actions as words.
+    [[= mcp::tool{}]] std::string ask_twice() {
+        const std::string first =
+            js::enum_to_string(elicit_form<Confirm>("确认删除？").action);
+        return first + " " +
+               js::enum_to_string(elicit_form<Confirm>("再确认一次？").action);
+    }
+    [[= mcp::prompt{}]] mcp::message ask_prompt() {
+        return {mcp::role::user,
+                mcp::text{js::enum_to_string(
+                    elicit_form<Confirm>("确认删除？").action)}};
+    }
+    [[= mcp::resource{.uri = js::str("file:///ask.txt"),
+                      .mime_type = js::str("text/plain")}]] std::string
+    ask_resource() {
+        return js::enum_to_string(elicit_form<Confirm>("确认删除？").action);
+    }
+};
+
+/// Request `_meta` declaring `_elicitation` as the client's elicitation
+/// capability for this request alone.
+json caps(json _elicitation) {
+    return json{{"io.modelcontextprotocol/clientCapabilities",
+                 {{"elicitation", std::move(_elicitation)}}}};
+}
+
+json form_caps() { return caps(json{{"form", json::object()}}); }
+
+/// A tools/call of `_tool`, carrying `_answer` as the retry's
+/// `inputResponses.elicit` when it is not null.
+json call_ask(int _id, json _meta, json _answer = nullptr,
+              std::string_view _tool = "ask") {
+    json params{{"name", _tool},
+                {"arguments", json::object()},
+                {"_meta", std::move(_meta)}};
+    if (!_answer.is_null()) {
+        params["inputResponses"] = {{"elicit", std::move(_answer)}};
+    }
+    return json{{"jsonrpc", "2.0"},
+                {"id", _id},
+                {"method", "tools/call"},
+                {"params", std::move(params)}};
+}
+
+/// The result of one request to a fresh ElicitServer.
+json elicit_result_of(const json &_request) {
+    ElicitServer server;
+    return drive(server, {_request.dump()}).at(0).at("result");
+}
+
+json accept(json _content) {
+    return json{{"action", "accept"}, {"content", std::move(_content)}};
+}
+
+/// The action a structured `complete` tools/call reports, with `value` when
+/// the user accepted.
+json answer_of(const json &_result) {
+    return _result.at("structuredContent");
+}
+
+} // namespace
+
+TEST(McpElicit, call_tool_is_unavailable) {
+    ElicitServer server;
+    EXPECT_EQ(server.call_tool("ask", json::object()),
+              json({{"action", "unavailable"}}).dump());
+}
+
+TEST(McpElicit, handshake_era_is_unavailable) {
+    ElicitServer server;
+    const json init = request(
+        "initialize", {{"protocolVersion", "2025-11-25"},
+                       {"capabilities",
+                        {{"elicitation", {{"form", json::object()}}}}}});
+    const std::vector<json> replies =
+        drive(server, {init.dump(), call_ask(2, form_caps()).dump()});
+    ASSERT_EQ(replies.size(), 2u);
+    const json &result = replies.at(1).at("result");
+    EXPECT_EQ(answer_of(result), json({{"action", "unavailable"}}));
+    EXPECT_FALSE(result.contains("inputRequests"));
+}
+
+TEST(McpElicit, first_leg_is_input_required) {
+    const json result = elicit_result_of(call_ask(1, form_caps()));
+    EXPECT_EQ(result.at("resultType"), "input_required");
+    EXPECT_EQ(result.at("inputRequests"),
+              json({{"elicit",
+                     {{"method", "elicitation/create"},
+                      {"params",
+                       {{"mode", "form"},
+                        {"message", "确认删除？"},
+                        {"requestedSchema",
+                         {{"type", "object"},
+                          {"properties",
+                           {{"yes", {{"type", "boolean"}}},
+                            {"note", {{"type", "string"}}}}},
+                          {"required", {"yes", "note"}}}}}}}}}));
+    EXPECT_EQ(result.at("_meta").at("io.modelcontextprotocol/serverInfo").at(
+                  "name"),
+              "elicit");
+    EXPECT_FALSE(result.contains("content"));
+    EXPECT_FALSE(result.contains("isError"));
+}
+
+TEST(McpElicit, null_form_capability_is_unavailable) {
+    const json result =
+        elicit_result_of(call_ask(1, caps(json{{"form", nullptr}})));
+    EXPECT_EQ(result.at("resultType"), "complete");
+    EXPECT_EQ(answer_of(result), json({{"action", "unavailable"}}));
+}
+
+TEST(McpElicit, accept_fills_the_struct) {
+    const json result = elicit_result_of(
+        call_ask(2, form_caps(), accept({{"yes", true}, {"note", "n"}})));
+    EXPECT_EQ(result.at("resultType"), "complete");
+    EXPECT_EQ(answer_of(result),
+              json({{"action", "accept"},
+                    {"value", {{"yes", true}, {"note", "n"}}}}));
+}
+
+TEST(McpElicit, decline_and_cancel_have_no_value) {
+    EXPECT_EQ(answer_of(elicit_result_of(
+                  call_ask(2, form_caps(), {{"action", "decline"}}))),
+              json({{"action", "decline"}}));
+    EXPECT_EQ(answer_of(elicit_result_of(
+                  call_ask(2, form_caps(), {{"action", "cancel"}}))),
+              json({{"action", "cancel"}}));
+}
+
+TEST(McpElicit, missing_form_capability_is_unavailable) {
+    const json result = elicit_result_of(call_ask(1, json::object()));
+    EXPECT_EQ(result.at("resultType"), "complete");
+    EXPECT_EQ(answer_of(result), json({{"action", "unavailable"}}));
+    EXPECT_FALSE(result.contains("inputRequests"));
+}
+
+TEST(McpElicit, capability_does_not_carry_to_the_next_request) {
+    ElicitServer server;
+    const std::vector<json> replies =
+        drive(server, {call_ask(1, form_caps()).dump(),
+                       call_ask(2, json::object()).dump()});
+    ASSERT_EQ(replies.size(), 2u);
+    EXPECT_EQ(replies.at(0).at("result").at("resultType"), "input_required");
+    EXPECT_EQ(answer_of(replies.at(1).at("result")),
+              json({{"action", "unavailable"}}));
+}
+
+TEST(McpElicit, accept_with_missing_field_is_unavailable) {
+    EXPECT_EQ(answer_of(elicit_result_of(
+                  call_ask(2, form_caps(), accept({{"yes", true}})))),
+              json({{"action", "unavailable"}}));
+}
+
+TEST(McpElicit, accept_with_non_object_is_unavailable) {
+    EXPECT_EQ(answer_of(elicit_result_of(
+                  call_ask(2, form_caps(), accept(json::array({true, "n"}))))),
+              json({{"action", "unavailable"}}));
+}
+
+TEST(McpElicit, responses_without_elicit_key_are_unavailable) {
+    json retry = call_ask(2, form_caps());
+    retry["params"]["inputResponses"] = {{"other", {{"action", "accept"}}}};
+    const json result = elicit_result_of(retry);
+    EXPECT_EQ(result.at("resultType"), "complete");
+    EXPECT_EQ(answer_of(result), json({{"action", "unavailable"}}));
+}
+
+TEST(McpElicit, second_ask_in_one_call_is_unavailable) {
+    EXPECT_EQ(elicit_result_of(call_ask(1, form_caps(), nullptr, "ask_twice"))
+                  .at("resultType"),
+              "input_required");
+    const json answer = accept({{"yes", true}, {"note", "n"}});
+    EXPECT_EQ(elicit_result_of(call_ask(2, form_caps(), answer, "ask_twice"))
+                  .at("content").at(0).at("text"),
+              "accept unavailable");
+}
+
+TEST(McpElicit, prompt_can_ask) {
+    const json result = elicit_result_of(request(
+        "prompts/get", {{"name", "ask_prompt"}, {"_meta", form_caps()}}));
+    EXPECT_EQ(result.at("resultType"), "input_required");
+    EXPECT_TRUE(result.at("inputRequests").contains("elicit"));
+}
+
+TEST(McpElicit, resource_can_ask) {
+    const json result = elicit_result_of(
+        request("resources/read",
+                {{"uri", "file:///ask.txt"}, {"_meta", form_caps()}}));
+    EXPECT_EQ(result.at("resultType"), "input_required");
+    EXPECT_TRUE(result.at("inputRequests").contains("elicit"));
+}
+
+TEST(McpElicit, http_can_ask) {
+    HttpServerOf<ElicitServer> http;
+    ASSERT_GT(http.server.http_port(), 0) << "serve_http did not bind";
+    json meta = form_caps();
+    meta.update(meta_version().at("_meta"));
+    const httplib::Result reply =
+        http.post(call_ask(1, std::move(meta)), {{"Mcp-Name", "ask"}});
+    ASSERT_TRUE(reply);
+    EXPECT_EQ(reply->status, 200);
+    EXPECT_EQ(json::parse(reply->body).at("result").at("resultType"),
+              "input_required");
 }

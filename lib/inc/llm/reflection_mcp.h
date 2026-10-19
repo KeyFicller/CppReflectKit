@@ -257,7 +257,72 @@ struct blob {
     std::vector<std::uint8_t> bytes;
 };
 
+/// What became of a form the server asked for. `unavailable` means nobody was
+/// asked or the answer did not fit the form, as opposed to a user's refusal.
+enum class elicit_action { accept, decline, cancel, unavailable };
+
+template <typename T> struct elicit_result {
+    elicit_action action;
+    std::optional<T> value; // only on accept
+};
+
 namespace detail {
+
+/// The elicitation state of the request this thread is dispatching. Absent in
+/// the handshake era and outside dispatch (`call_tool`), so nothing is asked.
+struct ElicitScope {
+    const nlohmann::json *params;
+    bool asked = false;
+};
+
+inline thread_local ElicitScope *t_elicit = nullptr;
+
+/// A form MCP can render: a class whose members are all bool, integer,
+/// floating point or std::string -- `requestedSchema` allows no nesting.
+template <typename T> consteval bool is_flat_form() {
+    if constexpr (!std::is_class_v<T>) {
+        return false;
+    } else {
+        for (std::meta::info member : std::meta::nonstatic_data_members_of(
+                 ^^T, std::meta::access_context::unchecked())) {
+            const std::meta::info type =
+                std::meta::dealias(std::meta::type_of(member));
+            if (!std::meta::is_integral_type(type) &&
+                !std::meta::is_floating_point_type(type) &&
+                !std::meta::is_same_type(type, ^^std::string)) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+/// `requestedSchema` for a flat form: every member a required scalar, and no
+/// keywords beyond type, properties and required.
+template <typename T> nlohmann::json flat_schema() {
+    using nlohmann::json;
+    json properties = json::object();
+    json required = json::array();
+    constexpr auto members =
+        std::define_static_array(std::meta::nonstatic_data_members_of(
+            ^^T, std::meta::access_context::unchecked()));
+    template for (constexpr std::meta::info member : members) {
+        const std::string name(std::meta::identifier_of(member));
+        properties[name] = {
+            {"type", js::json_type_name(std::meta::type_of(member))}};
+        required.push_back(name);
+    }
+    return json{{"type", "object"},
+                {"properties", std::move(properties)},
+                {"required", std::move(required)}};
+}
+
+/// Ends the member that asked; dispatch answers with `input_required`. Not a
+/// std::exception, so the handlers' catch blocks do not turn it into an
+/// `isError` result or a JSON-RPC error.
+struct ElicitAsk {
+    nlohmann::json request;
+};
 
 /// Base64, RFC 4648. One helper, so a block emitted from a tool and the same
 /// bytes emitted from a prompt or a resource carry identical text.
@@ -494,6 +559,14 @@ protected:
     virtual std::string_view server_version() const = 0;
     virtual std::string_view instructions() const { return {}; }
 
+    /// Asks the user to fill the flat form `T`, at most once per request. The
+    /// first time the call ends with an `input_required` result and the
+    /// member runs again from the top once the client retries with the
+    /// answer, so ask before any side effect. A `catch (...)` around this
+    /// call swallows that ending. See docs/about_mcp_elicitation.md.
+    template <typename T>
+    static elicit_result<T> elicit_form(std::string _message);
+
 private:
     struct Tool {
         std::string_view name;
@@ -589,6 +662,65 @@ void Server<Derived>::register_members() {
     using Self = typename[:Class:];
     scan<Class>(static_cast<Self *>(this),
                 std::make_index_sequence<class_member_count<Class>()>{});
+}
+
+// --- elicitation ------------------------------------------------------------
+
+template <class Derived>
+template <typename T>
+elicit_result<T> Server<Derived>::elicit_form(std::string _message) {
+    static_assert(detail::is_flat_form<T>(),
+                  "elicit_form needs a struct of bool, integer, floating point "
+                  "and std::string members");
+    using nlohmann::json;
+    const elicit_result<T> unavailable{elicit_action::unavailable,
+                                       std::nullopt};
+    detail::ElicitScope *scope = detail::t_elicit;
+    if (scope == nullptr || scope->asked) {
+        return unavailable;
+    }
+    scope->asked = true;
+    const json &params = *scope->params;
+
+    // A retry: the answer, if any, is all there is. Without an `elicit` key
+    // asking again would only make the client retry forever.
+    if (params.contains("inputResponses")) {
+        const json::json_pointer path("/inputResponses/elicit/action");
+        if (!params.contains(path) || !params.at(path).is_string()) {
+            return unavailable;
+        }
+        const json &answer = params.at("inputResponses").at("elicit");
+        const std::string action = answer.at("action").get<std::string>();
+        if (action == "decline") {
+            return {elicit_action::decline, std::nullopt};
+        }
+        if (action == "cancel") {
+            return {elicit_action::cancel, std::nullopt};
+        }
+        if (action != "accept" || !answer.contains("content") ||
+            !answer.at("content").is_object()) {
+            return unavailable;
+        }
+        try {
+            return {elicit_action::accept,
+                    js::from_json<T>(answer.at("content"))};
+        } catch (const std::exception &) {
+            return unavailable;
+        }
+    }
+
+    // The capability of this request alone; a prior request's says nothing.
+    const json::json_pointer form(
+        "/_meta/io.modelcontextprotocol~1clientCapabilities/elicitation/form");
+    if (!params.contains(form) || params.at(form).is_null()) {
+        return unavailable;
+    }
+    throw detail::ElicitAsk{
+        json{{"method", "elicitation/create"},
+             {"params",
+              {{"mode", "form"},
+               {"message", std::move(_message)},
+               {"requestedSchema", detail::flat_schema<T>()}}}}};
 }
 
 // --- protocol ---------------------------------------------------------------
@@ -691,26 +823,40 @@ std::string Server<Derived>::dispatch(const std::string &_line, Era &_era) {
             _era = Era::handshake;
             return detail::ok(id, on_initialize(params)).dump();
         }
+        // Only the stateless revision can ask: its answer arrives on a retry
+        // of this request, while the handshake era would need a back-channel.
+        detail::ElicitScope scope{&params};
+        struct Unscope {
+            ~Unscope() { detail::t_elicit = nullptr; }
+        } unscope;
+        if (_era == Era::modern) {
+            detail::t_elicit = &scope;
+        }
         json result;
-        if (method == "server/discover") {
-            result = on_discover();
-        } else if (method == "ping") {
-            result = json::object();
-        } else if (method == "tools/list") {
-            result = on_tools_list();
-        } else if (method == "tools/call") {
-            result = on_tools_call(params);
-        } else if (method == "prompts/list") {
-            result = on_prompts_list();
-        } else if (method == "prompts/get") {
-            result = on_prompts_get(params);
-        } else if (method == "resources/list") {
-            result = on_resources_list();
-        } else if (method == "resources/read") {
-            result = on_resources_read(params);
-        } else {
-            return detail::err(id, -32601, "Method not found: " + method)
-                .dump();
+        try {
+            if (method == "server/discover") {
+                result = on_discover();
+            } else if (method == "ping") {
+                result = json::object();
+            } else if (method == "tools/list") {
+                result = on_tools_list();
+            } else if (method == "tools/call") {
+                result = on_tools_call(params);
+            } else if (method == "prompts/list") {
+                result = on_prompts_list();
+            } else if (method == "prompts/get") {
+                result = on_prompts_get(params);
+            } else if (method == "resources/list") {
+                result = on_resources_list();
+            } else if (method == "resources/read") {
+                result = on_resources_read(params);
+            } else {
+                return detail::err(id, -32601, "Method not found: " + method)
+                    .dump();
+            }
+        } catch (const detail::ElicitAsk &_ask) {
+            result = json{{"resultType", "input_required"},
+                          {"inputRequests", {{"elicit", _ask.request}}}};
         }
         // TODO: Improve this.
         if (_era == Era::handshake) {

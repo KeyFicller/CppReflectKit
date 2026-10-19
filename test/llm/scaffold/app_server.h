@@ -164,6 +164,12 @@ inline std::vector<Hit> search_corpus(std::string_view _query, int _limit,
 
 } // namespace detail
 
+/// The form `ask_confirmation` asks the client to fill.
+struct Confirmation {
+    bool confirm;
+    std::string reason;
+};
+
 class CppReflectServer : public mcp::Server<CppReflectServer> {
 public:
     // A tool: the parameters become a JSON Schema, and the call decodes them.
@@ -191,6 +197,35 @@ public:
         }
         out += "]}";
         return out;
+    }
+
+    // A tool that cannot finish without the user. The first leg returns
+    // `input_required` and the client's retry carries the answer; the answer is
+    // then *used*, not echoed -- what the tool returns is its own decision, so
+    // a decline and an unanswerable client are reported differently. It acts on
+    // nothing, so the demo stays side-effect free.
+    [[= mcp::tool{.read_only = true, .open_world = false}]][[= js::doc{
+        .text = js::str("Asks the user to confirm before an action.")}]][
+        [= js::param_docs(js::str(
+            "What the user is being asked to confirm."))]] std::string
+        ask_confirmation(std::string question) {
+        const mcp::elicit_result<Confirmation> answer =
+            elicit_form<Confirmation>(question);
+        switch (answer.action) {
+        case mcp::elicit_action::accept:
+            // `value` is present exactly on accept, so the deref is the
+            // contract, not a guess.
+            return answer.value->confirm
+                       ? "confirmed: " + answer.value->reason
+                       : "the user said no: " + answer.value->reason;
+        case mcp::elicit_action::decline:
+            return "declined";
+        case mcp::elicit_action::cancel:
+            return "cancelled";
+        case mcp::elicit_action::unavailable:
+            return "could not ask: the client declared no form capability";
+        }
+        return "unreachable";
     }
 
     // A prompt: the same parameters become PromptArgument descriptors; the body

@@ -86,6 +86,21 @@ std::string call_tool_json(std::string_view _name, std::istream &_in) {
     return server.call_tool(_name, args);
 }
 
+/// One MCP exchange: the JSON-RPC lines arrive on `_in` and the replies are
+/// returned. The stdio loop ends at EOF, so a debugger-held process serves one
+/// leg per request without owning the stream -- the same trick `--serve` plays
+/// for the CLI commands. This is what `--serve` gains for MCP.
+std::string mcp_once_text(std::istream &_in) {
+    app::CppReflectServer server;
+    std::ostringstream out;
+    server.serve(_in, out);
+    std::string text = out.str();
+    while (!text.empty() && text.back() == '\n') {
+        text.pop_back();
+    }
+    return text;
+}
+
 std::string parse_response_json(std::string_view _name, std::istream &_in) {
     const json doc = parse_stdin(_in, "response");
     for (const auto &entry : js::model_registry()) {
@@ -123,6 +138,9 @@ std::string bridge::run_request(const std::vector<std::string> &_args,
     }
     if (command == "--parse") {
         return parse_response_json(_args.size() > 1 ? _args[1] : "", _in);
+    }
+    if (command == "--mcp") {
+        return mcp_once_text(_in);
     }
     throw std::runtime_error("unknown command: " + command);
 }

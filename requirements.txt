@@ -3,3 +3,4 @@ langgraph>=1.2.12
 langchain-deepseek>=1.1.0
 langchain-ollama>=1.1.0
 pytest>=8.0
+debugpy>=1.8

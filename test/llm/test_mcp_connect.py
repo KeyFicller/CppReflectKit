@@ -114,7 +114,7 @@ def http_server():
 
 def assert_exercised(discovered, tools, result):
     assert discovered.supported_versions == [PROTOCOL_VERSION]
-    assert [t.name for t in tools.tools] == ["search_documents"]
+    assert "search_documents" in [t.name for t in tools.tools]
     assert result.is_error is False
     assert json.loads(result.content[0].text)["query"] == "reflection"
 
@@ -128,7 +128,7 @@ def test_a_legacy_sdk_client_connects():
     """The reference SDK's handshake-era path, end to end over stdio."""
     pytest.importorskip("mcp", reason="the reference SDK is not installed")
     tools, result = asyncio.run(_connect_stdio_legacy())
-    assert [t.name for t in tools.tools] == ["search_documents"]
+    assert "search_documents" in [t.name for t in tools.tools]
     assert result.is_error is False
 
 
@@ -165,7 +165,8 @@ def test_a_handshake_era_http_client_connects():
                 url, json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
                 headers=after_handshake)
             assert listed.status_code == 200, listed.text
-            assert [t["name"] for t in listed.json()["result"]["tools"]] == ["search_documents"]
+            assert "search_documents" in [
+                t["name"] for t in listed.json()["result"]["tools"]]
             assert "_meta" not in listed.json()["result"], "the handshake era carries no result metadata"
             assert "resultType" not in listed.json()["result"]
 
@@ -236,7 +237,7 @@ def test_a_handshake_era_client_connects():
     assert "_meta" not in result, "the handshake predates result metadata"
     assert "resultType" not in result
 
-    assert [t["name"] for t in listed["result"]["tools"]] == ["search_documents"]
+    assert "search_documents" in [t["name"] for t in listed["result"]["tools"]]
     assert called["result"]["isError"] is False
     assert "_meta" not in listed["result"], "the handshake era carries no result metadata"
     assert "resultType" not in listed["result"]
