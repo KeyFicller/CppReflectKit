@@ -157,9 +157,9 @@ TEST(Mcp, tools_list) {
              json{{"name", "cppreflect"}, {"version", "0.1.0"}},
              "every result carries serverInfo");
     const json tools = listed.at("tools");
-    ASSERT_EQ(tools.size(), 2u) << "both marked functions are registered";
-    check_eq(tools.at(1).at("name"), "ask_confirmation",
-             "declaration order decides the table order");
+    ASSERT_EQ(tools.size(), 3u);
+    check_eq(tools.at(1).at("name"), "sleep_for", "second declared tool");
+    check_eq(tools.at(2).at("name"), "ask_confirmation", "third declared tool");
     const json &tool = tools.at(0);
     check_eq(tool.at("name"), "search_documents", "name from identifier_of");
     check_eq(tool.at("description"),
