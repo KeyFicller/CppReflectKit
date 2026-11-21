@@ -1,4 +1,5 @@
 langchain[mcp]>=1.4.2
+fastmcp[tasks]>=4.2.4,<5
 langgraph>=1.2.12
 langchain-deepseek>=1.1.0
 langchain-ollama>=1.1.0

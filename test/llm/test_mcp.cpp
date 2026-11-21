@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include "mcp_test_http.h"
 #include "scaffold/app_server.h"
 
 // Drives the real serve() loop through string streams, so what is asserted is
@@ -58,13 +59,7 @@ std::vector<json> drive(const std::vector<std::string> &_requests) {
     return drive(server, _requests);
 }
 
-json request(std::string_view _method, json _params = json::object()) {
-    json r{{"jsonrpc", "2.0"}, {"id", 1}, {"method", _method}};
-    if (!_params.empty()) {
-        r["params"] = std::move(_params);
-    }
-    return r;
-}
+using mcp_test::request;
 
 void check_eq(const json &_got, const json &_want, std::string_view _what) {
     EXPECT_EQ(_got, _want) << _what;
@@ -384,45 +379,10 @@ TEST(Mcp, one_table_two_emitters) {
 
 namespace {
 
-/// One Streamable HTTP server for the cases below. The destructor stops it,
-/// including when an assertion fails.
-template <class S> struct HttpServerOf {
-    S server;
-    std::thread thread;
-
-    HttpServerOf() : thread([this] { server.serve_http(0); }) {
-        for (int i = 0; i < 100 && server.http_port() < 0; ++i) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-
-    ~HttpServerOf() {
-        server.stop_http();
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
-
-    httplib::Result post(const json &_body, httplib::Headers _headers) {
-        _headers.emplace("Accept", "application/json, text/event-stream");
-        _headers.emplace("MCP-Protocol-Version",
-                         std::string(mcp::kProtocolVersion));
-        if (_body.contains("method")) {
-            _headers.emplace("Mcp-Method",
-                             _body.at("method").get<std::string>());
-        }
-        httplib::Client client("127.0.0.1", server.http_port());
-        return client.Post("/mcp", _headers, _body.dump(), "application/json");
-    }
-};
+using mcp_test::HttpServerOf;
+using mcp_test::meta_version;
 
 using HttpServer = HttpServerOf<app::CppReflectServer>;
-
-json meta_version(std::string_view _version = mcp::kProtocolVersion) {
-    return json{
-        {"_meta",
-         {{"io.modelcontextprotocol/protocolVersion", std::string(_version)}}}};
-}
 
 } // namespace
 

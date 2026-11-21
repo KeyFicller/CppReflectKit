@@ -419,14 +419,15 @@ if(CPPREF_BUILD_TESTS)
 
   # --- llm/ : the app under test, plus its tests. -------------------------
   # scaffold/ holds the example application (model, server, transport, entries,
-  # Python client); the two .cpp files beside it are the tests. The name stays
+  # Python client); the .cpp files beside it are the tests. The name stays
   # CppReflectKit because llm_client.py spawns build/CppReflectKit.
   add_executable(CppReflectKit
     test/llm/scaffold/main.cpp
     test/llm/scaffold/mcp_server.cpp
     test/llm/scaffold/bridge.cpp
     test/llm/test_json_schema.cpp
-    test/llm/test_mcp.cpp)
+    test/llm/test_mcp.cpp
+    test/llm/test_mcp_concurrency.cpp)
   target_link_libraries(CppReflectKit PRIVATE cppreflect::mcp GTest::gtest)
   # The app's tools read the repository's own documentation; bake the source
   # directory in so the corpus is found whatever the working directory, and let
