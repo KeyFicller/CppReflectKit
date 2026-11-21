@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -193,6 +195,22 @@ public:
         }
         out += "]}";
         return out;
+    }
+
+    // Holds a synchronous call slot. Parallel callers overlap up to the
+    // server's synchronous-call limit; a longer wall clock means they queued.
+    [[= mcp::tool{.read_only = true, .open_world = false}]][[= js::doc{
+        .text = js::str(
+            "Sleeps for the given number of seconds, then returns that count. "
+            "Use several calls together to observe overlapping execution.")}]][
+        [= js::param_docs(js::str(
+            "How many seconds to sleep, from 0 to 5."))]] std::string
+        sleep_for(int seconds) {
+        if (seconds < 0 || seconds > 5) {
+            throw std::invalid_argument("seconds must be from 0 to 5");
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(seconds));
+        return std::to_string(seconds);
     }
 
     // A tool that cannot finish without the user. The first leg returns

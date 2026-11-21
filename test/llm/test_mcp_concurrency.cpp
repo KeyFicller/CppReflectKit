@@ -1,6 +1,9 @@
 #include <exception>
 
+#include <asio/executor_work_guard.hpp>
+#include <asio/io_context.hpp>
 #include <asio/post.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/thread_pool.hpp>
 #include <gtest/gtest.h>
 
@@ -91,7 +94,47 @@ private:
 
 using IoHttpServer = mcp_test::HttpServerOf<IoServer>;
 
-json call(IoHttpServer &_http, std::string_view _method, json _params,
+class TimerServer : public mcp::Server<TimerServer> {
+public:
+    explicit TimerServer(asio::io_context &_timers)
+        : Server(1), m_timers(_timers) {}
+
+    std::string_view server_name() const override { return "timer-test"; }
+    std::string_view server_version() const override { return "1"; }
+
+    [[= mcp::tool{}]] mcp::awaitable<std::string> sleep_for(int seconds) {
+        struct WaitForTimer {
+            asio::steady_timer &timer;
+            asio::error_code error{};
+
+            bool await_ready() const noexcept { return false; }
+            void await_suspend(std::coroutine_handle<> _continuation) {
+                timer.async_wait(
+                    [this, _continuation](asio::error_code _error) {
+                        error = _error;
+                        _continuation.resume();
+                    });
+            }
+            void await_resume() const {
+                if (error) {
+                    throw std::system_error(error);
+                }
+            }
+        };
+
+        EXPECT_FALSE(m_timers.get_executor().running_in_this_thread());
+        asio::steady_timer timer(m_timers, std::chrono::seconds(seconds));
+        co_await mcp::this_coro::report_progress("waiting for timer");
+        co_await WaitForTimer{timer};
+        EXPECT_TRUE(m_timers.get_executor().running_in_this_thread());
+        co_return std::to_string(seconds) + "s";
+    }
+
+private:
+    asio::io_context &m_timers;
+};
+
+json call(auto &_http, std::string_view _method, json _params,
           std::string_view _name = {}) {
     _params.update(mcp_test::meta_version());
     _params["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"]
@@ -108,21 +151,21 @@ json call(IoHttpServer &_http, std::string_view _method, json _params,
     return json::parse(response->body).at("result");
 }
 
-std::string start(IoHttpServer &_http, std::string_view _name,
-                  json _arguments) {
-    const auto task =
+std::string start(auto &_http, std::string_view _name, json _arguments) {
+    const json task =
         call(_http, "tools/call",
              {{"name", _name}, {"arguments", std::move(_arguments)}}, _name);
     EXPECT_EQ(task.at("resultType"), "task");
     return task.at("taskId").get<std::string>();
 }
 
-json poll(IoHttpServer &_http, const std::string &_id) {
+json poll(auto &_http, const std::string &_id) {
     return call(_http, "tasks/get", {{"taskId", _id}}, _id);
 }
 
-bool wait_until(const auto &_condition) {
-    const auto deadline = std::chrono::steady_clock::now() + kWait;
+bool wait_until(const auto &_condition,
+                std::chrono::milliseconds _timeout = kWait) {
+    const auto deadline = std::chrono::steady_clock::now() + _timeout;
     do {
         if (_condition()) {
             return true;
@@ -132,13 +175,17 @@ bool wait_until(const auto &_condition) {
     return false;
 }
 
-void expect_text(IoHttpServer &_http, const std::string &_id,
-                 const std::string &_expected) {
+void expect_text(auto &_http, const std::string &_id,
+                 const std::string &_expected,
+                 std::chrono::milliseconds _timeout = kWait) {
     json task;
-    ASSERT_TRUE(wait_until([&] {
-        task = poll(_http, _id);
-        return task.at("status") != "working";
-    })) << _id;
+    ASSERT_TRUE(wait_until(
+        [&] {
+            task = poll(_http, _id);
+            return task.at("status") != "working";
+        },
+        _timeout))
+        << _id;
     ASSERT_EQ(task.at("status"), "completed") << task.dump();
     const auto &result = task.at("result");
     ASSERT_EQ(result.at("isError"), false) << result.dump();
@@ -220,6 +267,94 @@ TEST(McpConcurrency, file_reads_complete_while_url_requests_are_waiting) {
     release_responses.set_value();
     for (int i = 0; i < kParallelReads; ++i) {
         expect_text(mcp, url_ids.at(i), "url-" + std::to_string(i));
+    }
+}
+
+TEST(McpConcurrency, three_and_five_second_timers_overlap_with_one_mcp_worker) {
+    asio::io_context timers;
+    const auto work = asio::make_work_guard(timers);
+    std::jthread timer_thread([&timers](std::stop_token _stop) {
+        std::stop_callback stop(_stop, [&timers] { timers.stop(); });
+        timers.run();
+    });
+    mcp_test::HttpServerOf<TimerServer> http(timers);
+    ASSERT_GT(http.server.http_port(), 0);
+
+    const auto started = std::chrono::steady_clock::now();
+    const auto short_task = start(http, "sleep_for", {{"seconds", 3}});
+    const auto long_task = start(http, "sleep_for", {{"seconds", 5}});
+    ASSERT_TRUE(wait_until([&] {
+        return poll(http, long_task).value("statusMessage", "") ==
+                   "waiting for timer" &&
+               poll(http, short_task).value("statusMessage", "") ==
+                   "waiting for timer";
+    }));
+    expect_text(http, short_task, "3s", 8s);
+    expect_text(http, long_task, "5s", 8s);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started);
+    RecordProperty("elapsed_ms", std::to_string(elapsed.count()));
+}
+
+class DirectServer : public mcp::Server<DirectServer> {
+public:
+    std::string_view server_name() const override { return "direct-test"; }
+    std::string_view server_version() const override { return "1"; }
+
+    std::atomic<int> entered{0};
+    std::promise<void> release;
+
+    [[= mcp::tool{}]] int hold(int value) {
+        ++entered;
+        if (m_release.wait_for(kGateTimeout) != std::future_status::ready) {
+            throw std::runtime_error("timed out waiting to release calls");
+        }
+        return value;
+    }
+
+private:
+    std::shared_future<void> m_release = release.get_future().share();
+};
+
+TEST(McpConcurrency, ordinary_http_calls_overlap_and_leave_room_for_ping) {
+    mcp_test::HttpServerOf<DirectServer> http;
+    ASSERT_GT(http.server.http_port(), 0);
+
+    const auto invoke = [&](int value) {
+        auto params = mcp_test::meta_version();
+        params["name"] = "hold";
+        params["arguments"] = {{"value", value}};
+        auto request = mcp_test::request("tools/call", std::move(params));
+        request["id"] = value;
+        return http.post(request, {{"Mcp-Name", "hold"}});
+    };
+    constexpr int concurrent_calls = 4;
+    std::vector<std::future<httplib::Result>> calls;
+    for (int value = 0; value < concurrent_calls; ++value) {
+        calls.push_back(std::async(std::launch::async, invoke, value));
+    }
+    if (!wait_until([&] { return http.server.entered == concurrent_calls; })) {
+        http.server.release.set_value();
+        FAIL() << "Only " << http.server.entered.load() << " tools entered";
+    }
+
+    const auto ping =
+        http.post(mcp_test::request("ping", mcp_test::meta_version()), {});
+    EXPECT_TRUE(ping && ping->status == 200);
+    const auto overload = invoke(concurrent_calls);
+    EXPECT_TRUE(overload && overload->status == 503);
+    EXPECT_EQ(http.server.entered.load(), concurrent_calls);
+    http.server.release.set_value();
+
+    for (int value = 0; value < concurrent_calls; ++value) {
+        const auto reply = calls.at(value).get();
+        ASSERT_TRUE(reply);
+        ASSERT_EQ(reply->status, 200);
+        const auto rpc = json::parse(reply->body);
+        EXPECT_EQ(rpc.at("id"), value);
+        const auto &result = rpc.at("result");
+        EXPECT_EQ(result.at("resultType"), "complete");
+        EXPECT_EQ(result.at("content").at(0).at("text"), std::to_string(value));
     }
 }
 

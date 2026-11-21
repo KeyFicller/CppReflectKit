@@ -10,6 +10,7 @@
 #include <meta>
 #include <mutex>
 #include <optional>
+#include <semaphore>
 #include <stdexcept>
 #include <stop_token>
 #include <string>
@@ -46,6 +47,8 @@ struct CallContext {
 /**
  * @brief Serves the annotated tools, prompts and resources of a derived class.
  * @tparam Derived The application server type.
+ * @details HTTP requests can invoke application callbacks concurrently.
+ * Synchronize shared mutable state accessed by these callbacks.
  */
 template <class Derived> class Server {
 public:
@@ -248,8 +251,25 @@ private:
         detail::CallContext *m_previous;
     };
 
+    static constexpr std::ptrdiff_t kMaxSynchronousCalls = 4;
+
+    class SynchronousCall {
+    public:
+        explicit SynchronousCall(const Server &_server) : m_server(_server) {
+            if (!m_server.m_synchronous_slots.try_acquire()) {
+                throw detail::TaskUnavailable("MCP synchronous calls are busy");
+            }
+        }
+
+        SynchronousCall(const SynchronousCall &) = delete;
+        SynchronousCall &operator=(const SynchronousCall &) = delete;
+        ~SynchronousCall() { m_server.m_synchronous_slots.release(); }
+
+    private:
+        const Server &m_server;
+    };
+
     detail::CallContext *current_call() const;
-    std::unique_lock<std::mutex> lock_inline_call() const;
     ServerInfo snapshot_server_info() const;
     detail::RpcReply dispatch(const nlohmann::json &_request, Era &_era,
                               detail::TaskRuntime &_tasks,
@@ -280,7 +300,8 @@ private:
     std::vector<Resource> m_resources;
 
     const std::size_t m_workers;
-    mutable std::mutex m_inline_mutex;
+    mutable std::counting_semaphore<kMaxSynchronousCalls> m_synchronous_slots{
+        kMaxSynchronousCalls};
     mutable std::mutex m_calls_mutex;
     mutable std::unordered_map<std::thread::id, detail::CallContext *> m_calls;
 

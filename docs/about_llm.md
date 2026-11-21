@@ -280,8 +280,11 @@ Each serving loop accepts up to 32 outstanding jobs. It holds up to
 1,024 task records, with a 128 KiB limit on each recorded result. The HTTP body
 limit is 256 KiB. When task admission is saturated, it can wait up to 500 ms for
 capacity. Task admission overload returns HTTP `503` with `Retry-After`. The
-HTTP socket queue may close excess connections. Synchronous responses
-share one slot so polling and cancellation can proceed during a long call.
+HTTP socket queue may close excess connections. HTTP runs eight request
+workers. Up to four synchronous tool calls, prompt renders, and resource reads
+can run at once so control requests have room to proceed. If all four slots
+are occupied, the server returns HTTP `503` with `Retry-After` for further
+synchronous calls. Protect shared mutable state in application callbacks.
 
 Call `stop_http()` and wait for `serve_http()` to return before destroying the
 server object. Shutdown requests cancellation and waits for accepted tools

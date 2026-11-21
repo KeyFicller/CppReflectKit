@@ -152,16 +152,6 @@ void Server<Derived>::report_task_progress(std::string_view _message) const {
 }
 
 template <class Derived>
-std::unique_lock<std::mutex> Server<Derived>::lock_inline_call() const {
-    std::unique_lock lock(m_inline_mutex, std::try_to_lock);
-    if (!lock) {
-        throw detail::TaskUnavailable(
-            "A synchronous MCP call is already running");
-    }
-    return lock;
-}
-
-template <class Derived>
 template <typename T>
 elicit_result<T> Server<Derived>::elicit_form(std::string _message) const {
     static_assert(detail::is_flat_form<T>(),
@@ -398,14 +388,14 @@ std::optional<nlohmann::json> Server<Derived>::handle_method(
         return on_prompts_list();
     }
     if (_method == "prompts/get") {
-        const auto call = lock_inline_call();
+        const SynchronousCall call(*this);
         return on_prompts_get(_params);
     }
     if (_method == "resources/list") {
         return on_resources_list();
     }
     if (_method == "resources/read") {
-        const auto call = lock_inline_call();
+        const SynchronousCall call(*this);
         return on_resources_read(_params);
     }
     return std::nullopt;
@@ -506,9 +496,9 @@ Server<Derived>::on_tools_call(const nlohmann::json &_params, Era _era,
     if (tool->hints.background || tool->run_coroutine) {
         const bool return_handle =
             _era == Era::modern && detail::declares_tasks(_params);
-        std::unique_lock<std::mutex> inline_call;
+        std::optional<SynchronousCall> inline_call;
         if (!return_handle) {
-            inline_call = lock_inline_call();
+            inline_call.emplace(*this);
         }
         if (tool->run_coroutine) {
             auto work = detail::run_coroutine_task(tool->run_coroutine,
@@ -525,7 +515,7 @@ Server<Derived>::on_tools_call(const nlohmann::json &_params, Era _era,
         return return_handle ? _tasks.submit(std::move(work))
                              : _tasks.run(std::move(work));
     }
-    const auto call = lock_inline_call();
+    const SynchronousCall call(*this);
     return run_tool(*tool, args);
 }
 

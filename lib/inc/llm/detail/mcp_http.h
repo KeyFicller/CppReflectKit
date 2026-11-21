@@ -159,8 +159,8 @@ int Server<Derived>::serve_http(std::string_view _host, int _port) {
         host.find(':') == std::string::npos ? host : "[" + host + "]";
     HttpRun run(m_workers);
     auto &http = run.http;
-    const std::size_t http_workers = supports_tasks() ? 8 : 1;
-    http.new_task_queue = [http_workers] {
+    http.new_task_queue = [] {
+        constexpr std::size_t http_workers = 2 * kMaxSynchronousCalls;
         return new httplib::ThreadPool(http_workers, http_workers, 64);
     };
     http.set_keep_alive_max_count(1);
