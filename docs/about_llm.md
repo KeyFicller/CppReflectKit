@@ -223,7 +223,10 @@ rejecting `response_format: json_schema` by sending a tool schema — which forc
 
 Declare background execution at the tool definition. A synchronous tool sets
 `background`. A coroutine tool returns `mcp::awaitable<T>`. Both start on the
-same worker pool. The tool can use operations with compatible C++ awaiters.
+same worker pool, which runs the standalone Asio event loop. The tool can use
+operations with compatible C++ awaiters. The `cppreflect::mcp` target uses
+installed Asio headers or fetches a pinned release when `CPPREF_FETCH_DEPS` is
+enabled.
 
 ```cpp
 [[= mcp::tool{.background = true}]]
@@ -251,6 +254,16 @@ The `tools/call` response then carries a `taskId`. Poll `tasks/get` for the
 result or send `tasks/cancel`. Declare the extension on each task request. On
 HTTP, set `Mcp-Name` to the task ID on these requests. Legacy clients wait for
 the tool and receive its result on `tools/call`.
+
+For a tool that returns a task handle, `tasks/get` exposes its latest progress
+as `statusMessage` and updates `lastUpdatedAt` when the message changes. A
+synchronous background tool calls `report_task_progress("Indexed 42 / 100 files")`.
+A coroutine tool uses `co_await mcp::this_coro::report_progress("Indexed 42 / 100 files")`
+to report without suspending.
+
+Messages must be valid UTF-8 and at most 1024 bytes. Report an empty string to
+clear the message. The task clears progress when it finishes or cancellation
+is requested. Direct calls that return the tool result ignore progress reports.
 
 ### Deploying HTTP
 

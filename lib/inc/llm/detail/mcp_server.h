@@ -37,7 +37,7 @@ struct RpcReply;
 
 struct CallContext {
     const nlohmann::json *params = nullptr;
-    std::stop_token stop{};
+    TaskContext task{};
     bool asked = false;
 };
 
@@ -165,6 +165,15 @@ protected:
      * cancellation.
      */
     bool task_stop_requested() const;
+
+    /**
+     * @brief Reports a polling status message from a synchronous task.
+     * @param _message UTF-8 status text of at most 1024 bytes. An empty message
+     * clears the current text.
+     * @details Invalid messages are ignored. Progress is exposed for calls
+     * that return a task handle.
+     */
+    void report_task_progress(std::string_view _message) const;
 
 private:
     enum class Era { modern, handshake };

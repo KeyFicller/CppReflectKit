@@ -2,9 +2,11 @@
 
 #include <coroutine>
 #include <exception>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
+#include <string_view>
 #include <utility>
 
 namespace mcp {
@@ -13,6 +15,23 @@ template <typename T> class awaitable;
 
 namespace detail {
 struct StopToken {};
+
+struct ReportProgress {
+    std::string_view message;
+};
+
+using ProgressCallback = std::function<void(std::string_view)>;
+
+struct TaskContext {
+    std::stop_token stop;
+    const ProgressCallback *progress = nullptr;
+
+    void report(std::string_view message) const {
+        if (progress) {
+            (*progress)(message);
+        }
+    }
+};
 }
 
 namespace this_coro {
@@ -20,6 +39,17 @@ namespace this_coro {
  * @brief Await to obtain the current task's cooperative cancellation token.
  */
 inline constexpr detail::StopToken stop_token{};
+
+/**
+ * @brief Reports a polling status message when awaited inside a task.
+ * @param _message UTF-8 status text of at most 1024 bytes. An empty message
+ * clears the current text.
+ * @details Invalid messages are ignored. Progress is exposed for calls that
+ * return a task handle. Await this operation while the message is still valid.
+ */
+inline auto report_progress(std::string_view _message) noexcept {
+    return detail::ReportProgress{_message};
+}
 }
 
 namespace detail {
@@ -43,7 +73,7 @@ struct ReadyStopToken {
 };
 
 template <typename T> struct AwaitablePromise : CoroutineResult<T> {
-    std::stop_token stop;
+    TaskContext task;
     std::coroutine_handle<> continuation = std::noop_coroutine();
     std::exception_ptr error;
 
@@ -66,7 +96,13 @@ template <typename T> struct AwaitablePromise : CoroutineResult<T> {
     }
     void unhandled_exception() noexcept { error = std::current_exception(); }
 
-    ReadyStopToken await_transform(StopToken) const noexcept { return {stop}; }
+    ReadyStopToken await_transform(StopToken) const noexcept {
+        return {task.stop};
+    }
+    std::suspend_never await_transform(ReportProgress _report) const {
+        task.report(_report.message);
+        return {};
+    }
     template <typename A> A &&await_transform(A &&_awaiter) const noexcept {
         return std::forward<A>(_awaiter);
     }
@@ -139,8 +175,12 @@ private:
         std::coroutine_handle<>
         await_suspend(std::coroutine_handle<Parent> _parent) noexcept {
             auto &child = handle.promise();
-            if constexpr (requires { child.stop = _parent.promise().stop; }) {
-                child.stop = _parent.promise().stop;
+            if constexpr (requires { child.task = _parent.promise().task; }) {
+                child.task = _parent.promise().task;
+            } else if constexpr (requires {
+                                     child.task.stop = _parent.promise().stop;
+                                 }) {
+                child.task.stop = _parent.promise().stop;
             }
             child.continuation = _parent;
             return handle;
@@ -158,11 +198,11 @@ namespace detail {
 
 struct StartedCoroutine {
     struct promise_type {
-        std::stop_token stop;
+        TaskContext task;
 
         template <typename Work, typename Complete>
-        promise_type(Work &, const std::stop_token &_stop, Complete &) noexcept
-            : stop(_stop) {}
+        promise_type(Work &, const TaskContext &_task, Complete &) noexcept
+            : task(_task) {}
 
         StartedCoroutine get_return_object() const noexcept { return {}; }
         std::suspend_never initial_suspend() const noexcept { return {}; }
@@ -174,7 +214,7 @@ struct StartedCoroutine {
 
 template <typename T, typename Complete>
 StartedCoroutine start_coroutine(awaitable<T> _work,
-                                 [[maybe_unused]] std::stop_token _stop,
+                                 [[maybe_unused]] TaskContext _task,
                                  Complete _complete) {
     std::optional<T> result;
     std::exception_ptr error;

@@ -2,6 +2,9 @@
 
 #include "mcp_awaitable.h"
 
+#include <asio/executor_work_guard.hpp>
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -40,7 +43,7 @@ class TaskRuntime {
     using Json = nlohmann::json;
     using Clock = std::chrono::steady_clock;
     using WallClock = std::chrono::system_clock;
-    using BlockingWork = std::function<Json(std::stop_token)>;
+    using BlockingWork = std::function<Json(TaskContext)>;
     using Job = std::variant<BlockingWork, awaitable<Json>>;
 
     static constexpr auto kRetention = std::chrono::minutes(1);
@@ -49,6 +52,7 @@ class TaskRuntime {
     static constexpr std::size_t kMaxRecords = 1024;
     static constexpr std::size_t kMaxWaiters = 2;
     static constexpr std::size_t kMaxResultBytes = 128 * 1024;
+    static constexpr std::size_t kMaxStatusMessageBytes = 1024;
     enum class Status { working, completed, failed, cancelled };
 
     struct Task {
@@ -58,11 +62,12 @@ class TaskRuntime {
         WallClock::time_point updated = created;
         std::optional<Clock::time_point> expires;
         Status status = Status::working;
-        bool running = false;
         std::stop_source stop;
         bool cancel_requested = false;
         std::optional<Job> job;
         std::optional<std::promise<Json>> reply;
+        std::string status_message;
+        ProgressCallback progress;
         std::string payload;
     };
 
@@ -74,6 +79,7 @@ public:
         for (auto &stop : mark_stopping()) {
             stop.request_stop();
         }
+        m_work.reset();
         m_workers.clear();
         std::unique_lock lock(m_mutex);
         m_admission.wait(lock, [this] { return m_in_flight == 0; });
@@ -86,7 +92,6 @@ public:
         }
         m_stopping = true;
         m_admission.notify_all();
-        m_work_ready.notify_all();
         std::vector<std::stop_source> stops;
         for (auto it = m_tasks.begin(); it != m_tasks.end();) {
             const auto task = (it++)->second;
@@ -108,11 +113,17 @@ public:
         std::unique_lock lock(m_mutex);
         await_admission(lock, m_stdio && _reply.has_value());
         while (m_workers.size() < m_worker_count) {
-            m_workers.emplace_back([this] { worker(); });
+            m_workers.emplace_back([this] { m_executor.run(); });
         }
         auto task = std::make_shared<Task>();
         task->reply = std::move(_reply);
         task->job.emplace(std::move(_work));
+        if (!task->reply) {
+            task->progress = [this,
+                              record = task.get()](std::string_view message) {
+                report_progress(*record, message);
+            };
+        }
         return submit_locked(task);
     }
 
@@ -161,36 +172,36 @@ public:
     }
 
 private:
-    void worker() {
-        for (;;) {
-            std::shared_ptr<Task> task;
-            {
-                std::unique_lock lock(m_mutex);
-                m_work_ready.wait(
-                    lock, [this] { return m_stopping || !m_pending.empty(); });
-                if (m_stopping) {
-                    return;
-                }
-                task = std::move(m_pending.front());
-                m_pending.pop_front();
-                task->running = true;
-                ++m_active_workers;
-            }
-            auto job = std::move(*task->job);
-            task->job.reset();
-            execute(task, job);
-            std::lock_guard lock(m_mutex);
-            --m_active_workers;
-            m_admission.notify_all();
+    void execute_next() {
+        std::unique_lock lock(m_mutex);
+        --m_posted;
+        if (m_pending.empty()) {
+            return;
         }
+
+        auto task = std::move(m_pending.front());
+        m_pending.pop_front();
+        auto job = std::move(*task->job);
+        task->job.reset();
+        ++m_active_workers;
+        lock.unlock();
+
+        execute(task, job);
+
+        lock.lock();
+        --m_active_workers;
+        m_admission.notify_all();
     }
 
     void execute(const std::shared_ptr<Task> &_task, Job &_job) {
+        const TaskContext context{.stop = _task->stop.get_token(),
+                                  .progress = _task->progress ? &_task->progress
+                                                              : nullptr};
         if (auto *blocking = std::get_if<BlockingWork>(&_job)) {
             Json result;
             std::exception_ptr error;
             try {
-                result = (*blocking)(_task->stop.get_token());
+                result = (*blocking)(context);
             } catch (...) {
                 error = std::current_exception();
             }
@@ -199,8 +210,7 @@ private:
         }
         try {
             start_coroutine(
-                std::get<awaitable<Json>>(std::move(_job)),
-                _task->stop.get_token(),
+                std::get<awaitable<Json>>(std::move(_job)), context,
                 [this, task = _task](std::exception_ptr _error, Json _result) {
                     complete(task, _error, std::move(_result));
                 });
@@ -272,13 +282,16 @@ private:
         Json result = _task->reply ? Json() : snapshot(*_task, true);
         m_tasks.emplace(id, _task);
         try {
+            if (m_pending.size() == m_posted) {
+                asio::post(m_executor, [this] { execute_next(); });
+                ++m_posted;
+            }
             m_pending.push_back(_task);
         } catch (...) {
             m_tasks.erase(id);
             throw;
         }
         ++m_in_flight;
-        m_work_ready.notify_one();
         return result;
     }
 
@@ -295,6 +308,9 @@ private:
                     {"lastUpdatedAt", timestamp(_task.updated)},
                     {"ttlMs", nullptr},
                     {"pollIntervalMs", 250}};
+        if (!_task.status_message.empty()) {
+            result["statusMessage"] = _task.status_message;
+        }
         if (_task.expires) {
             result["ttlMs"] =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -317,10 +333,28 @@ private:
         return result;
     }
 
+    void report_progress(Task &_task, std::string_view _message) {
+        if (_message.size() > kMaxStatusMessageBytes) {
+            return;
+        }
+        try {
+            (void)Json(_message).dump();
+        } catch (const Json::type_error &) {
+            return;
+        }
+        std::lock_guard lock(m_mutex);
+        if (_task.status == Status::working && !_task.cancel_requested &&
+            _task.status_message != _message) {
+            _task.status_message = _message;
+            _task.updated = WallClock::now();
+        }
+    }
+
     void finish(const std::shared_ptr<Task> &_task, Status _status) {
         _task->updated = WallClock::now();
         _task->expires = Clock::now() + kRetention;
         _task->status = _status;
+        _task->status_message.clear();
         m_finished.push_back(_task);
     }
 
@@ -330,7 +364,11 @@ private:
             return {};
         }
         _task->cancel_requested = true;
-        if (_task->running) {
+        if (!_task->status_message.empty()) {
+            _task->status_message.clear();
+            _task->updated = WallClock::now();
+        }
+        if (!_task->job) {
             return _task->stop;
         }
         std::erase(m_pending, _task);
@@ -420,9 +458,12 @@ private:
     bool m_stopping = false;
     std::unordered_map<std::string, std::shared_ptr<Task>> m_tasks;
     std::deque<std::shared_ptr<Task>> m_finished;
-    std::condition_variable m_work_ready;
     std::deque<std::shared_ptr<Task>> m_pending;
+    std::size_t m_posted = 0;
     std::size_t m_active_workers = 0;
+    asio::io_context m_executor;
+    asio::executor_work_guard<asio::io_context::executor_type> m_work =
+        asio::make_work_guard(m_executor);
     std::vector<std::jthread> m_workers;
 };
 

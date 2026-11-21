@@ -1286,6 +1286,31 @@ public:
         });
         co_await completion;
     }
+
+    [[= mcp::tool{.background = true}]] std::string
+        report_blocking_progress(std::string_view value) {
+        report_task_progress(std::string(value));
+        report_task_progress(std::string(1, static_cast<char>(0xff)));
+        report_task_progress(std::string(1025, 'x'));
+        ++started;
+        while (!release && !task_stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return "finished";
+    }
+
+    [[= mcp::tool{}]] mcp::awaitable<std::string>
+        report_coroutine_progress(std::string_view value) {
+        co_await mcp::this_coro::report_progress("waiting");
+        co_await report_after_resume(value);
+        co_await await_completion(second_completion);
+        co_return "finished";
+    }
+
+    mcp::awaitable<void> report_after_resume(std::string_view value) {
+        co_await await_completion(first_completion);
+        co_await mcp::this_coro::report_progress(value);
+    }
 };
 
 constexpr auto kTasksExtension = "io.modelcontextprotocol/tasks";
@@ -1509,6 +1534,46 @@ TEST(Mcp, coroutines_share_the_pool_and_release_workers_when_suspended) {
               "sync fallback");
 }
 
+TEST(Mcp, polling_reports_progress_from_blocking_and_resumed_tasks) {
+    HttpServerOf<LongTaskServer> http;
+    const auto submit = [&](std::string_view tool, std::string_view value) {
+        return post_task_rpc(http, long_call(value, true, tool), tool)
+            .at("result")
+            .at("taskId")
+            .get<std::string>();
+    };
+    const auto blocking = submit("report_blocking_progress", "处理中");
+    const auto coroutine = submit("report_coroutine_progress", "resumed");
+    ASSERT_TRUE(wait_until([&] {
+        return http.server.started == 1 &&
+               http.server.first_completion.waiting();
+    }));
+    const auto poll = [&](const auto &id) {
+        return post_task_rpc(http, task_request("tasks/get", id), id)
+            .at("result");
+    };
+    EXPECT_EQ(poll(blocking).value("statusMessage", ""), "处理中");
+    EXPECT_EQ(poll(coroutine).value("statusMessage", ""), "waiting");
+
+    http.server.first_completion.complete();
+    ASSERT_TRUE(wait_until(
+        [&] { return http.server.second_completion.waiting(); }));
+    EXPECT_EQ(poll(coroutine).value("statusMessage", ""), "resumed");
+    EXPECT_EQ(poll(blocking).value("statusMessage", ""), "处理中");
+
+    http.server.release = true;
+    const auto completed = wait_for_task(http, blocking);
+    EXPECT_EQ(completed.at("status"), "completed");
+    EXPECT_FALSE(completed.contains("statusMessage"));
+
+    ASSERT_TRUE(
+        post_task_rpc(http, task_request("tasks/cancel", coroutine), coroutine)
+            .contains("result"));
+    const auto cancelled = wait_for_task(http, coroutine);
+    EXPECT_EQ(cancelled.at("status"), "cancelled");
+    EXPECT_FALSE(cancelled.contains("statusMessage"));
+}
+
 TEST(Mcp, task_runtime_is_isolated_and_cancels_coroutines_on_shutdown) {
     HttpServerOf<LongTaskServer> first;
     HttpServerOf<LongTaskServer> second;
@@ -1623,6 +1688,38 @@ TEST(Mcp, task_admission_waits_and_keeps_control_requests_responsive) {
                     .contains("result"));
     EXPECT_EQ(waiting.get().at("result").at("resultType"), "task");
     EXPECT_EQ(http.server.metadata_reads.load(), 1);
+}
+
+TEST(Mcp, cancelling_a_queued_task_releases_admission_before_a_worker_frees) {
+    HttpServerOf<LongTaskServer> http;
+    post_task_rpc(http, long_call("first"), "slow").at("result").at("taskId");
+    post_task_rpc(http, long_call("second"), "slow").at("result").at("taskId");
+    ASSERT_TRUE(wait_until([&] { return http.server.started == 2; }));
+
+    const auto cancelled = post_task_rpc(http, long_call("queued"), "slow")
+                               .at("result")
+                               .at("taskId")
+                               .get<std::string>();
+    for (int i = 0; i < 29; ++i) {
+        ASSERT_EQ(post_task_rpc(http, long_call("queued"), "slow")
+                      .at("result")
+                      .at("resultType"),
+                  "task");
+    }
+    ASSERT_TRUE(
+        post_task_rpc(http, task_request("tasks/cancel", cancelled), cancelled)
+            .contains("result"));
+    EXPECT_EQ(wait_for_task(http, cancelled).at("status"), "cancelled");
+
+    const auto replacement = post_task_rpc(http, long_call("queued"), "slow");
+    ASSERT_TRUE(replacement.contains("result")) << replacement.dump();
+    EXPECT_EQ(replacement.at("result").at("resultType"), "task");
+    EXPECT_EQ(http.server.started.load(), 2);
+
+    http.server.release = true;
+    const auto replacement_id =
+        replacement.at("result").at("taskId").get<std::string>();
+    EXPECT_EQ(wait_for_task(http, replacement_id).at("status"), "completed");
 }
 
 TEST(Mcp, invalid_and_oversized_task_results_fail_in_the_task_record) {

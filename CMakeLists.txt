@@ -15,7 +15,7 @@ cmake_minimum_required(VERSION 3.20)
 #   cppreflect::undo   field capture / restore        (no external dependency)
 #   cppreflect::ui     ImGui widgets                  (Dear ImGui)
 #   cppreflect::json   JSON Schema + decoder          (nlohmann/json)
-#   cppreflect::mcp    MCP server                     (cppreflect::json, cpp-httplib, cppcodec)
+#   cppreflect::mcp    MCP server                     (cppreflect::json, cpp-httplib, cppcodec, Asio)
 #   cppreflect::common the compile environment they all share
 # ---------------------------------------------------------------------------
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
@@ -252,11 +252,37 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
     target_include_directories(cppcodec_headers INTERFACE "${cppcodec_SOURCE_DIR}")
   endif()
 
+  if(NOT TARGET asio::asio)
+    find_path(CPPREF_ASIO_INCLUDE_DIR asio/io_context.hpp)
+    if(NOT CPPREF_ASIO_INCLUDE_DIR)
+      if(NOT CPPREF_FETCH_DEPS)
+        message(FATAL_ERROR "Standalone Asio headers not found and CPPREF_FETCH_DEPS=OFF")
+      endif()
+      cmake_policy(PUSH)
+      if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+      endif()
+      FetchContent_Declare(
+        cppreflect_asio
+        URL "https://codeload.github.com/chriskohlhoff/asio/tar.gz/refs/tags/asio-1-38-2"
+        URL_HASH SHA256=9f2648fa483e58a6bf848d970ee0ea650ca19ed7769dfa520ed4f7b8d27af1db
+        SOURCE_SUBDIR include
+      )
+      FetchContent_MakeAvailable(cppreflect_asio)
+      cmake_policy(POP)
+      set(CPPREF_ASIO_INCLUDE_DIR "${cppreflect_asio_SOURCE_DIR}/include")
+    endif()
+    add_library(cppreflect_asio_headers INTERFACE)
+    add_library(asio::asio ALIAS cppreflect_asio_headers)
+    target_include_directories(cppreflect_asio_headers SYSTEM INTERFACE "${CPPREF_ASIO_INCLUDE_DIR}")
+    target_compile_definitions(cppreflect_asio_headers INTERFACE ASIO_STANDALONE)
+  endif()
+
   find_package(Threads REQUIRED)
 
   cppreflect_library(mcp)
   target_link_libraries(cppreflect_mcp INTERFACE cppreflect_json httplib::httplib
-                                               cppcodec::cppcodec Threads::Threads)
+                                               cppcodec::cppcodec asio::asio Threads::Threads)
 endif()
 
 # --- ui: needs Dear ImGui, which upstream ships without a CMakeLists ---------

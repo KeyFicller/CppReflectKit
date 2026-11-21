@@ -141,7 +141,14 @@ detail::CallContext *Server<Derived>::current_call() const {
 
 template <class Derived> bool Server<Derived>::task_stop_requested() const {
     const auto *context = current_call();
-    return context && context->stop.stop_requested();
+    return context && context->task.stop.stop_requested();
+}
+
+template <class Derived>
+void Server<Derived>::report_task_progress(std::string_view _message) const {
+    if (const auto *context = current_call()) {
+        context->task.report(_message);
+    }
 }
 
 template <class Derived>
@@ -510,9 +517,9 @@ Server<Derived>::on_tools_call(const nlohmann::json &_params, Era _era,
                                  : _tasks.run(std::move(work));
         }
         auto work = [this, tool,
-                     args = std::move(args)](std::stop_token _stop) {
+                     args = std::move(args)](detail::TaskContext _task) {
             const ActiveCall call(
-                *this, detail::CallContext{.stop = std::move(_stop)});
+                *this, detail::CallContext{.task = std::move(_task)});
             return run_tool(*tool, args);
         };
         return return_handle ? _tasks.submit(std::move(work))
