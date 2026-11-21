@@ -9,3 +9,4 @@ IndentWidth: 4
 # Level with the enclosing class/struct, the way the 2-space style had it:
 # with IndentWidth 4 the LLVM default of -2 leaves modifiers half a level in.
 AccessModifierOffset: -4
+FixNamespaceComments: false

@@ -199,6 +199,8 @@ constexpr std::string_view shape_schema =
 constexpr std::string_view optional_arg_schema =
     js::function_schema<^^optional_arg>();
 
+int optional_only(std::optional<int> value) { return value.value_or(17); }
+
 [[maybe_unused]] int with_default(int value, int fallback = 1) {
     return value + fallback;
 }
@@ -461,6 +463,25 @@ TEST(JsonSchema, an_unknown_key_is_rejected) {
                   (void)js::invoke_with_json<^^optional_arg>(*free);
               }),
               "unknown key: nope");
+}
+
+TEST(JsonSchema, function_arguments_must_be_an_object) {
+    EXPECT_EQ(bind_error_message([] {
+                  (void)js::invoke_with_json<^^optional_only>(json::array());
+              }),
+              "expected arguments object");
+    EXPECT_EQ(js::invoke_with_json<^^optional_only>(json::object()), 17);
+}
+
+TEST(JsonSchema, string_view_encodes_as_a_json_string) {
+    struct Caption {
+        std::string_view text;
+    };
+    constexpr std::string_view text{"a\0\"b", 4};
+    const json schema = json::parse(js::tool_schema<Caption>());
+    EXPECT_EQ(schema.at("properties").at("text").at("type"), "string");
+    EXPECT_EQ(json::parse(js::to_json(Caption{text})),
+              json({{"text", std::string(text)}}));
 }
 
 TEST(JsonSchema, a_missing_required_member_is_rejected) {

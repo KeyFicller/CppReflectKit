@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         }
-        return bridge::run_http(port);
+        return bridge::run_http(port, argc > 3 ? argv[3] : nullptr);
     }
 
     // gtest's own flags (--gtest_list_tests, --gtest_filter, ...) must reach

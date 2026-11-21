@@ -39,12 +39,11 @@ std::string search_documents(std::string query, int limit, bool exact_match);
 
 ## How the dispatch works
 
-Both callers run the same four steps over `parameters_of(Fn)`. The source comments
-say so outright — the widget layer's introspection is written "as in the JSON
-layer's tool call".
+Both callers run the same four steps over `parameters_of(Fn)`.
 
-**1. The parameters are reflected, once.** Three `consteval` helpers, identical in
-both layers, turn the signature into compile-time facts:
+**1. The parameters are reflected.** Both layers share
+`cppreflect::detail::param_count` and `cppreflect::detail::param_at`. Each layer
+then derives the argument types it needs from those parameter reflections.
 
 ```cpp
 consteval std::size_t param_count();                    // parameters_of(Fn).size()

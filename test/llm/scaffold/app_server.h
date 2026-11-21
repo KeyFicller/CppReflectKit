@@ -100,11 +100,7 @@ inline std::string trimmed(std::string_view _text) {
     return std::string(_text.substr(begin, end - begin));
 }
 
-/// The document the resource serves, and the scheme its URI is written with.
-/// The marker's URI is a literal (an annotation value must be), so the
-/// static_assert below the class keeps the two from drifting apart.
-inline constexpr std::string_view design_notes_uri =
-    "file:///docs/about_llm.md";
+inline constexpr auto design_notes_uri = js::str("file:///docs/about_llm.md");
 inline constexpr std::string_view file_uri_prefix = "file:///";
 
 /// The path a `file:///` URI names, relative to the corpus root.
@@ -182,7 +178,7 @@ public:
         search_documents(std::string query, int limit, bool exact_match) {
         const std::vector<detail::Hit> hits =
             detail::search_corpus(query, limit, exact_match);
-        std::string out = "{\"query\":\"" + js::json_escape(query) + "\"";
+        std::string out = "{\"query\":" + js::to_json(query);
         out += ",\"limit\":" + std::to_string(limit);
         out +=
             ",\"exact_match\":" + std::string(exact_match ? "true" : "false");
@@ -191,9 +187,9 @@ public:
         for (const detail::Hit &hit : hits) {
             out += first ? "" : ",";
             first = false;
-            out += "{\"file\":\"" + js::json_escape(hit.file) + "\"";
+            out += "{\"file\":" + js::to_json(hit.file);
             out += ",\"line\":" + std::to_string(hit.line);
-            out += ",\"text\":\"" + js::json_escape(hit.text) + "\"}";
+            out += ",\"text\":" + js::to_json(hit.text) + "}";
         }
         out += "]}";
         return out;
@@ -247,7 +243,7 @@ public:
     // A resource: the URI and MIME type live in the marker; name and
     // description still come from reflection. The body serves the file the URI
     // names, so the resource cannot drift from the document it advertises.
-    [[= mcp::resource{.uri = js::str("file:///docs/about_llm.md"),
+    [[= mcp::resource{.uri = detail::design_notes_uri,
                       .mime_type = js::str("text/markdown")}]][[= js::doc{
         .text = js::str(
             "Design notes for the reflection-driven MCP server.")}]] std::string
@@ -255,7 +251,7 @@ public:
         return detail::read_file(
             detail::corpus_root() /
             std::filesystem::path(
-                detail::uri_relative_path(detail::design_notes_uri)));
+                detail::uri_relative_path(detail::design_notes_uri.data)));
     }
 
 protected:
@@ -266,11 +262,5 @@ protected:
                "reflection suite.";
     }
 };
-
-// The marker's URI and the path the body reads must name the same document; a
-// second literal that could drift is a compile error instead.
-static_assert(mcp::resource_uri<^^CppReflectServer::design_notes>() ==
-                  detail::design_notes_uri,
-              "resource marker URI and detail::design_notes_uri must agree");
 
 } // namespace app

@@ -252,9 +252,11 @@ if(CPPREF_WITH_LLM OR CPPREF_BUILD_TESTS)
     target_include_directories(cppcodec_headers INTERFACE "${cppcodec_SOURCE_DIR}")
   endif()
 
+  find_package(Threads REQUIRED)
+
   cppreflect_library(mcp)
   target_link_libraries(cppreflect_mcp INTERFACE cppreflect_json httplib::httplib
-                                               cppcodec::cppcodec)
+                                               cppcodec::cppcodec Threads::Threads)
 endif()
 
 # --- ui: needs Dear ImGui, which upstream ships without a CMakeLists ---------

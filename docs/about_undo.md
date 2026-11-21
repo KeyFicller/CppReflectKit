@@ -48,35 +48,33 @@ session.redo();   // both are back
 
 ## How the derivation works
 
-**1. `MEMBER()` is the registration.** The base is CRTP; it scans the derived class's
-members by reflection, so there is no registry, no static initializer, no per-type
-code. `MEMBER(type, name, …)` generates the accessors and, on the first write in a
-command, appends the field's before value to the object's stream:
+**1. `MEMBER()` declares a tracked field.** The base finds these fields by reflection.
+The macro generates the accessors and passes the field index to `undo::detail::touch_member()`.
+That hook checks that the object is open and records the field's before value
+the first time it is touched after `open()`.
 
 ```cpp
-#define MEMBER(type, name, ...)                                                          \
-public:                                                                                  \
-    type& touch_##name()                                                                 \
-    {                                                                                    \
-        using owner_type = std::remove_cvref_t<decltype(*this)>;                         \
-        constexpr std::uint32_t kIndex =                                                 \
-            static_cast<std::uint32_t>(::undo::member_index<owner_type>(^^owner_type::name)); \
-        if (this->begin_record(kIndex)) {                                                \
-            m_character_stream.append(reinterpret_cast<const char*>(&kIndex), sizeof(kIndex)); \
-            ::undo::detail::encode(m_character_stream, name.get());                      \
-        }                                                                                \
-        return name.touch();                                                             \
-    }                                                                                    \
-    const type& get_##name() const { return name.get(); }                                \
-private:                                                                                 \
-    ::undo::Member<type> name{__VA_ARGS__}
+#define MEMBER(type, name, ...)                                                \
+public:                                                                        \
+    type &touch_##name() {                                                     \
+        using owner_type = std::remove_cvref_t<decltype(*this)>;               \
+        constexpr auto index = static_cast<std::uint32_t>(                     \
+            ::undo::detail::member_index<owner_type>(^^owner_type::name));     \
+        return ::undo::detail::touch_member<owner_type>(*this, index, name);        \
+    }                                                                          \
+    const type &get_##name() const { return name.get(); }                      \
+                                                                               \
+private:                                                                       \
+    ::undo::detail::Member<type> name{__VA_ARGS__}
 ```
 
 **2. One member index, `consteval`.** A payload names fields by position, computed once
 at compile time — the same key in the before image, the after image and `apply_payload`:
 
 ```cpp
+namespace undo::detail {
 template <typename T> consteval std::size_t member_index(std::meta::info target);
+}
 // MEMBER(int, m_page, 0) => ^^Document::m_page has index 0
 ```
 
@@ -110,8 +108,8 @@ declared.
 
 | From one `MEMBER(type, name, …)` | Projection |
 |---|---|
-| the macro body | `touch_name()` (record once per command) and `get_name()` |
-| `member_index<Derived>` | the field's **key** in the before and after images |
+| the macro body | `touch_name()` (record once per open/close pair) and `get_name()` |
+| `detail::member_index<Derived>` | the field's **key** in the before and after images |
 | `detail::encode` / `detail::decode` | the field's **bytes**, recursing into the type |
 
 The codec is the only place that knows the type:
@@ -137,7 +135,7 @@ independent of commands.
 
 | | Command | Transaction |
 |---|---|---|
-| Brackets | `begin()` / `end()` | `begin_transaction()` / `commit()` / `rollback_to()` |
+| Brackets | `begin()` / `end()` | `Transaction` construction / `commit()` / `rollback()` |
 | Unit of | the undo/redo stacks | a savepoint (`Mark`) |
 | Relation | — | 1 transaction : N commands, or part of one |
 | On commit | pushes an undo node | releases the mark, adds no node |
@@ -146,8 +144,11 @@ independent of commands.
 
 Both rollbacks share one primitive: abort any open object, then walk the entries and
 commands back from the mark. `undo::Transaction` is the RAII handle — construct to take
-the mark, `commit()` to keep, destroy without either to roll back. A command that wrote
-nothing is dropped; committing with an object still open, or calling `undo()` / `redo()`
+the mark, call `commit()` to keep the changes, or let destruction roll them back.
+The manual equivalent calls `Session::begin_transaction()` to get a `Mark`, optionally
+`rollback_to(mark)` to revert the writes, then `end_transaction()` to release the savepoint.
+
+A command that wrote nothing is dropped; committing with an object still open, or calling `undo()` / `redo()`
 mid-command, is rejected. A mark taken mid-command reverts to that command's start when
 it covers a field already written in the command — there is no second snapshot.
 

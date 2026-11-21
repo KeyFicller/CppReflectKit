@@ -19,6 +19,7 @@ import contextlib
 import json
 import os
 import re
+import socket
 import subprocess
 
 import pytest
@@ -94,19 +95,24 @@ async def _connect_stdio_legacy():
 
 
 @contextlib.contextmanager
-def http_server():
+def http_server(bind_host=None):
     """Start the app's Streamable HTTP listener on an OS-chosen port.
 
     Port 0 avoids guessing; the bound port is what the server announces on
     stderr, so the test never races another process for a fixed number.
     """
+    command = [BINARY, "--http", "0"]
+    if bind_host is not None:
+        command.append(bind_host)
+    host = bind_host if bind_host is not None else "127.0.0.1"
+    authority = f"[{host}]" if ":" in host else host
     process = subprocess.Popen(
-        [BINARY, "--http", "0"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         banner = process.stderr.readline()
-        match = re.search(r"http://127\.0\.0\.1:(\d+)/mcp", banner)
+        match = re.search(rf"http://{re.escape(authority)}:(\d+)/mcp", banner)
         assert match, f"server never announced its port; stderr said {banner!r}"
-        yield f"http://127.0.0.1:{match.group(1)}/mcp"
+        yield f"http://{authority}:{match.group(1)}/mcp"
     finally:
         process.terminate()
         process.wait(timeout=5)
@@ -136,6 +142,22 @@ def test_a_modern_http_client_connects():
     pytest.importorskip("mcp", reason="the reference SDK is not installed")
     with http_server() as url:
         assert_exercised(*asyncio.run(_connect_http(url)))
+
+
+def test_http_binds_an_explicit_ipv6_host():
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        pytest.skip("IPv6 loopback is unavailable")
+
+    httpx = pytest.importorskip("httpx", reason="httpx is not installed")
+    with http_server("::1") as url, httpx.Client(trust_env=False, timeout=5) as client:
+        reply = client.post(
+            url, json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+            headers=STREAMABLE_ACCEPT)
+        assert reply.status_code == 200, reply.text
+        assert reply.json() == {"jsonrpc": "2.0", "id": 1, "result": {}}
 
 
 def test_a_handshake_era_http_client_connects():

@@ -7,3 +7,5 @@ CMakeUserPresets.json
 .venv/*
 __pycache__/
 .cursor/*
+.agents/
+.codex/
