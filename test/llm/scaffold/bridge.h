@@ -28,8 +28,7 @@ int serve(std::string_view _socket_path);
 /// Local MCP: stdin/stdout. Returns when stdin reaches EOF.
 int run_mcp();
 
-/// External MCP: Streamable HTTP on 127.0.0.1:`_port`, path `/mcp`. Blocks
-/// until the process is signaled to exit. Returns 1 if the port will not bind.
-int run_http(int _port);
+/// Serves Streamable HTTP on the given host, or 127.0.0.1 when _host is null.
+int run_http(int _port, const char *_host);
 
 } // namespace bridge

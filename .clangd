@@ -1,0 +1,17 @@
+# Headers have no entry in compile_commands.json. clangd then copies some other
+# file's command, and for lib/inc that proxy is often a third-party target
+# (yaml-cpp, googletest) compiled without -freflection-latest. <meta> still
+# resolves from the fork's libc++, but std::meta and define_static_string stay
+# hidden, so every use in the header is reported as an error.
+CompileFlags:
+  CompilationDatabase: build
+
+---
+If:
+  PathMatch: lib/inc/.*
+CompileFlags:
+  Add:
+    - -freflection-latest
+    - -std=c++26
+    # compile commands run with cwd = build/, so this is the repo's lib/inc.
+    - -I../lib/inc

@@ -1,0 +1,15 @@
+PROJECT_NAME           = CppReflectKit
+PROJECT_BRIEF          = C++26 reflection library for JSON, MCP, Undo, and UI
+OUTPUT_DIRECTORY       = build/doxygen
+INPUT                  = lib/inc
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXCLUDE_SYMBOLS        = detail *::detail *::detail::* promise_type
+MAX_INITIALIZER_LINES  = 1
+VERBATIM_HEADERS       = NO
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+QUIET                  = YES
+WARN_AS_ERROR          = FAIL_ON_WARNINGS

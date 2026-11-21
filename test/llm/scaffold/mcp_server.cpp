@@ -11,7 +11,7 @@ int bridge::run_mcp() {
     return server.stdio();
 }
 
-int bridge::run_http(int _port) {
+int bridge::run_http(int _port, const char *_host) {
     app::CppReflectServer server;
-    return server.serve_http(_port);
+    return _host ? server.serve_http(_host, _port) : server.serve_http(_port);
 }

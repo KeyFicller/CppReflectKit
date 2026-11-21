@@ -1,13 +1,5 @@
 #pragma once
 
-// The example database object under test. The reusable machinery -- the
-// undo::DbObject base class, the undo::Member<T> field template and the undo
-// codec -- lives in lib/inc/undo/reflection_undo.h; this file only declares the
-// fields, exercising every type the codec supports.
-//
-// undo::DbObject is CRTP, so the object names itself as its own base argument;
-// that is how the base reflects the fields declared here.
-
 #include "undo/reflection_undo.h"
 
 #include <optional>

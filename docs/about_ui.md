@@ -136,7 +136,7 @@ the names (packed for `ImGui::Combo`) and the values (for the index round-trip),
 the list cannot drift from the enum:
 
 ```cpp
-template <typename E> consteval std::string enum_names_packed();  // "Celsius\0Fahrenheit\0\0"
+template <typename E> consteval std::string_view enum_names_packed();  // "Celsius\0Fahrenheit\0\0"
 template <typename E> consteval auto enum_values();               // the enumerator values
 ```
 
@@ -207,18 +207,19 @@ of one struct instead of one per function.
 
 **7. `label` is the same mechanism, for the display name.** It carries a compile-time
 string (`ui::str`), so its type is a specialization (`label<N>`) rather than a fixed
-type; `find_annotation_template` matches it the way the JSON layer matches `doc<N>`.
+type. Both the UI and JSON layers use the shared annotation lookup to match
+specializations such as `label<N>` and `doc<N>`.
 The walk reads it first, and falls back to the reflected member name when there is
 none:
 
 ```cpp
 [[= ui::label{.text = ui::str("Input voltage")}]] int m_volts;   // shown as "Input voltage"
-const std::string member_label = field_label<field>();
+const std::string member_label = detail::field_label<field>();
 ```
 
 **A reflection query must sit in a constant-evaluated context.** `field_label` is
 `consteval` and branches with `if constexpr`; a lookup written as a runtime expression
-— `has_annotation_template<^^label, field>() ? … : …` — compiles, but the annotation
+— `has_annotation<^^label, field>() ? … : …` — compiles, but the annotation
 comes back empty at run time, so the label silently disappears. Keep the query in an
 `if constexpr` (as `field_label` and `is_widget_annotated` do) and out of a `?:`.
 
@@ -263,7 +264,7 @@ cmake --build build --target ui_reflection
 
 Because the target cannot run under CTest, the annotation path is verified at compile
 time instead: `test/ui/test_reflection_widgets.cpp` asserts that each annotation is
-read and its values come through (`ui::annotation_value<…>().v_min == -10`), that the
+read and its values come through (`ui::detail::annotation_value<…>().v_min == -10`), that the
 annotation names the function it should (`…().fn == ^^ImGui::SliderInt`), and that the
 vocabulary still holds (`control_members_are_parameters`, `is_control_function`), so a
 typo in `control` or an unsupported `fn` is rejected at build time.

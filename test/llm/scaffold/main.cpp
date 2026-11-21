@@ -10,6 +10,10 @@
 
 #include <gtest/gtest.h>
 
+namespace mcp_test {
+int run_io_http(const char *_directory, const char *_upstream_port);
+}
+
 // The app entry point: the process llm_client.py spawns. The CLI/MCP modes are
 // routed first; with no arguments (or gtest's own flags) it runs the runtime
 // tests defined in this directory.
@@ -28,6 +32,10 @@ int main(int argc, char *argv[]) {
         return bridge::run_mcp();
     }
 
+    if (argc == 4 && std::strcmp(argv[1], "--test-io-http") == 0) {
+        return mcp_test::run_io_http(argv[2], argv[3]);
+    }
+
     // External MCP: this process is already running; agents POST /mcp.
     if (argc > 1 && std::strcmp(argv[1], "--http") == 0) {
         int port = 8765;
@@ -40,7 +48,7 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         }
-        return bridge::run_http(port);
+        return bridge::run_http(port, argc > 3 ? argv[3] : nullptr);
     }
 
     // gtest's own flags (--gtest_list_tests, --gtest_filter, ...) must reach
